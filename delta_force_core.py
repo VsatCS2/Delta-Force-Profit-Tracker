@@ -22,7 +22,7 @@ import json
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -130,6 +130,28 @@ def have_credentials(endpoint: str = "matchlist") -> bool:
     _resolve_credentials)."""
     c = _resolve_credentials(endpoint)
     return bool(c.get("openid") and c.get("token") and c.get("s"))
+
+
+def current_openid() -> str:
+    """The logged-in player's openid, or "" if not logged in.
+
+    Read from whichever endpoint's credentials were captured (the openid
+    is the same in all of them), never from one specific block - login
+    stops as soon as ANY one request is captured (see _resolve_credentials),
+    so which block ends up populated is down to what the page happened to
+    request first. Anything that needs the player's identity should call
+    this rather than reach into a particular *_CREDENTIALS block; the
+    leaderboard's Join button did exactly that, reading only the matchlist
+    block, and failed for people who were fully logged in.
+
+    Loads the saved capture first, so it also works right after launch
+    before any fetch has had a chance to.
+    """
+    try:
+        refresh_credentials_from_browser()
+    except Exception:
+        pass
+    return _resolve_credentials("matchlist").get("openid", "") or ""
 
 
 def require_credentials(endpoint: str) -> None:
@@ -1481,6 +1503,51 @@ def overview(rows: list) -> dict:
         "losses": losses,
         "win_rate": (wins / total_matches * 100) if total_matches else 0.0,
         "all_time_matches": total_matches,
+    }
+
+
+def best_map_and_operator(rows: list) -> tuple:
+    """Highest total net income grouped by map / by operator name - the
+    definition behind the rail's 'Best Map' / 'Best Operator' and the
+    leaderboard's columns of the same name."""
+    map_groups, op_groups = {}, {}
+    for r in rows or []:
+        map_groups[r["map_name"]] = map_groups.get(r["map_name"], 0) + r["net_income"]
+        op_groups[r["operator_name"]] = op_groups.get(r["operator_name"], 0) + r["net_income"]
+    best_map = max(map_groups.items(), key=lambda kv: kv[1])[0] if map_groups else ""
+    best_op = max(op_groups.items(), key=lambda kv: kv[1])[0] if op_groups else ""
+    return best_map, best_op
+
+
+def daily_stats_utc(rows: list, now=None) -> dict:
+    """Totals for the current UTC calendar day - what the community
+    daily leaderboard ranks on.
+
+    A UTC day rather than the local calendar day used by the rest of the
+    app, on purpose: a leaderboard needs one shared window and one shared
+    reset moment, or a player in Manila and one in Los Angeles would be
+    racing over different 24 hours. Each match's local timestamp is
+    converted to UTC before it's bucketed; `now` (a timezone-aware UTC
+    datetime) exists so tests can pin the clock.
+    """
+    now = now or datetime.now(timezone.utc)
+    day = now.strftime("%Y-%m-%d")
+    today = []
+    for r in rows or []:
+        try:
+            if r["datetime"].astimezone(timezone.utc).strftime("%Y-%m-%d") == day:
+                today.append(r)
+        except (OverflowError, OSError, ValueError):
+            continue  # an unconvertible timestamp just doesn't count
+    best_map, best_op = best_map_and_operator(today)
+    return {
+        "day": day,
+        "net_income": sum(r["net_income"] for r in today),
+        "matches": len(today),
+        "wins": sum(1 for r in today if r["result"] == "win"),
+        "losses": sum(1 for r in today if r["result"] == "loss"),
+        "best_map": best_map,
+        "best_operator": best_op,
     }
 
 

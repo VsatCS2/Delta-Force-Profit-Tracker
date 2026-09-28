@@ -17,7 +17,7 @@ core tracker.
 Why no Discord/OAuth:
     A player only ever reaches this module after delta_force_login.py has
     already completed a real, verified login to the game's own DfTools
-    backend - core.MATCHLIST_CREDENTIALS["openid"] is only ever populated
+    backend - core.current_openid() is only ever populated
     from THAT authenticated session, never typed in by hand. That's a
     reasonable identity signal on its own, so registering here is just
     "tell the server the openid and nickname the game itself already gave
@@ -25,7 +25,7 @@ Why no Discord/OAuth:
     dance, no client secret to protect.
 
     The one rule that keeps this trustworthy: opt_in() below must always
-    read the openid from core.MATCHLIST_CREDENTIALS, never accept it as a
+    read the openid from core.current_openid(), never accept it as a
     free-text argument from a caller. If that ever changes, this
     identity model no longer holds.
 
@@ -41,11 +41,29 @@ import delta_force_core as core
 from delta_force_paths import APP_DATA_DIR
 from delta_force_version import APP_VERSION, version_tuple
 
-# Point this at your own deployed backend - see server/README.md. Left
-# blank, every function below just fails soft (is_linked() stays False,
-# fetch_leaderboard() returns []), so an unconfigured build still works
-# fine as a purely local tracker.
-SERVER_URL = "https://dfstats.onrender.com"
+def normalize_url(url: str) -> str:
+    """Tolerates the usual hand-typing slips: surrounding whitespace, a
+    missing scheme, a trailing slash. A bare domain gets https:// - a
+    scheme-less URL is otherwise a hard error in requests ("No scheme
+    supplied"), which is exactly how the leaderboard's Join button first
+    failed. An explicit http:// is left alone (local testing)."""
+    url = (url or "").strip().rstrip("/")
+    if url and "://" not in url:
+        url = "https://" + url
+    return url
+
+
+# Deployment-specific addresses live in delta_force_config.py - see there.
+# Left blank, every function below just fails soft (is_linked() stays
+# False, fetch_leaderboard() returns []), so an unconfigured build still
+# works fine as a purely local tracker.
+try:
+    from delta_force_config import SERVER_URL as _CFG_SERVER_URL
+    from delta_force_config import UPDATE_INFO_URL as _CFG_UPDATE_INFO_URL
+except ImportError:
+    _CFG_SERVER_URL = _CFG_UPDATE_INFO_URL = ""
+
+SERVER_URL = normalize_url(_CFG_SERVER_URL)
 
 ACCOUNT_FILE = APP_DATA_DIR / "community_account.json"
 
@@ -54,9 +72,9 @@ _REQUEST_TIMEOUT_SECONDS = 10
 
 class NotLoggedInError(RuntimeError):
     """Raised by opt_in() when there's no DfTools login yet to identify
-    the player with - opting into the leaderboard needs core.
-    MATCHLIST_CREDENTIALS to be populated first (i.e. the person has
-    already used 'Log In (browser)' at least once)."""
+    the player with - opting into the leaderboard needs a captured login
+    first (i.e. the person has already used 'Log In (browser)' at least
+    once)."""
     pass
 
 
@@ -183,7 +201,7 @@ def opt_in(nickname: str = None, want_visible: bool = True, timeout: int = _REQU
     """
     server_url = _require_server()
 
-    openid = (core.MATCHLIST_CREDENTIALS or {}).get("openid", "")
+    openid = core.current_openid()
     if not openid:
         raise NotLoggedInError(
             "Log in to Delta Force Tracker first (the 'Log In (browser)' "
@@ -213,13 +231,7 @@ def opt_in(nickname: str = None, want_visible: bool = True, timeout: int = _REQU
 def _best_map_and_operator(rows: list) -> tuple:
     """Same definition as the GUI's rail 'Best Map' / 'Best Operator':
     highest total net income grouped by map/operator name."""
-    map_groups, op_groups = {}, {}
-    for r in rows or []:
-        map_groups[r["map_name"]] = map_groups.get(r["map_name"], 0) + r["net_income"]
-        op_groups[r["operator_name"]] = op_groups.get(r["operator_name"], 0) + r["net_income"]
-    best_map = max(map_groups.items(), key=lambda kv: kv[1])[0] if map_groups else ""
-    best_op = max(op_groups.items(), key=lambda kv: kv[1])[0] if op_groups else ""
-    return best_map, best_op
+    return core.best_map_and_operator(rows)
 
 
 def sync_stats(rows: list, profile: dict = None, timeout: int = _REQUEST_TIMEOUT_SECONDS) -> dict:
@@ -252,38 +264,60 @@ def sync_stats(rows: list, profile: dict = None, timeout: int = _REQUEST_TIMEOUT
         "best_operator": best_operator,
         "rank_label": rank_label,
     }
+    # Today's totals (UTC day) for the daily leaderboard. An older server
+    # simply ignores these fields, so this is safe against any backend.
+    daily = core.daily_stats_utc(rows)
+    payload.update({
+        "daily_date": daily["day"],
+        "daily_net_income": int(daily["net_income"]),
+        "daily_matches": int(daily["matches"]),
+        "daily_wins": int(daily["wins"]),
+        "daily_losses": int(daily["losses"]),
+        "daily_best_map": daily["best_map"],
+        "daily_best_operator": daily["best_operator"],
+    })
     resp = _request_authed("POST", f"{server_url}/stats/sync", json=payload,
                            headers=headers, timeout=timeout)
     return resp.json()
 
 
-def fetch_leaderboard(sort: str = "net_income", limit: int = 50) -> list:
-    """Returns a list of opted-in players' stats, or [] on any failure
-    (server unreachable, not configured, etc.) - this is meant to be safe
-    to call straight from a GUI refresh without a try/except at the call
-    site. Unauthenticated (the leaderboard is public), so this never
-    raises LinkExpiredError - there's no api_key involved here to expire."""
+def fetch_leaderboard_full(sort: str = "net_income", limit: int = 50,
+                           period: str = "all"):
+    """(players, meta). period is "all" or "daily". meta carries the
+    server's period/day/resets_at for the daily view ({} otherwise).
+    Fails soft to ([], {}) like everything else here - safe to call from
+    a GUI refresh without a try/except.
+
+    Rows differ by period: all-time rows use net_income_all_time, daily
+    rows use net_income (see delta_force_gui's row_net())."""
     if not SERVER_URL:
-        return []
+        return [], {}
     try:
         resp = requests.get(
             f"{SERVER_URL}/leaderboard",
-            params={"sort": sort, "limit": limit},
+            params={"sort": sort, "limit": limit, "period": period},
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
-        return resp.json().get("players", [])
+        data = resp.json()
+        meta = {k: data[k] for k in ("period", "day", "resets_at") if k in data}
+        return data.get("players", []), meta
     except Exception:
-        return []
+        return [], {}
 
 
-# Optional. Where to read the latest-version info from. Leave blank to use
-# SERVER_URL + "/version". A static file (for example version.json in a
-# GitHub repo, via its raw.githubusercontent.com URL) is the more reliable
-# choice on a free Render plan: that server sleeps after 15 idle minutes
-# and takes about a minute to wake, and every redeploy wipes its database.
+def fetch_leaderboard(sort: str = "net_income", limit: int = 50) -> list:
+    """The all-time board as a plain list (kept for existing callers)."""
+    return fetch_leaderboard_full(sort, limit, "all")[0]
+
+
+# Optional (set in delta_force_config.py). Where to read the latest-version
+# info from; blank falls back to SERVER_URL + "/version". A static file
+# (for example version.json in a GitHub repo, via its
+# raw.githubusercontent.com URL) is the most reliable choice - it never
+# sleeps and doesn't depend on the leaderboard server being up.
 # Expected JSON: {"latest_version": "1.2.0", "download_url": "https://..."}
-UPDATE_INFO_URL = ""
+UPDATE_INFO_URL = normalize_url(_CFG_UPDATE_INFO_URL)
 
 # Generous because the check runs on a background thread, and a sleeping
 # free-tier server can take about a minute to answer its first request.
@@ -294,26 +328,46 @@ def update_check_configured() -> bool:
     return bool(UPDATE_INFO_URL or SERVER_URL)
 
 
-def check_for_update() -> dict:
-    """Returns {'latest_version', 'download_url'} if the server reports
-    a version newer than this build's, or None if there's nothing newer,
-    the server isn't configured, or the check fails for any reason -
-    this is a best-effort courtesy notice, never something the app
-    should surface an error over. Unauthenticated, same as
-    fetch_leaderboard()."""
+def check_for_update_status():
+    """(status, detail). status is one of:
+      "update"       - detail is {'latest_version', 'download_url'}
+      "current"      - the server answered; nothing newer
+      "failed"       - couldn't check; detail is a short reason
+      "unconfigured" - no URL set at all
+    Kept separate from check_for_update() so a manual "Check for Updates"
+    click can say "couldn't check" instead of claiming you're up to date
+    when the address is wrong or the site is unreachable."""
     url = UPDATE_INFO_URL or (f"{SERVER_URL}/version" if SERVER_URL else "")
     if not url:
-        return None
+        return "unconfigured", None
     try:
         resp = requests.get(url, timeout=_UPDATE_CHECK_TIMEOUT_SECONDS)
         resp.raise_for_status()
         data = resp.json()
         latest = data.get("latest_version", "")
+        if version_tuple(latest) == (0,):
+            return "failed", "the reply didn't include a valid latest_version"
         if version_tuple(latest) > version_tuple(APP_VERSION):
-            return data
-        return None
-    except Exception:
-        return None
+            return "update", data
+        return "current", None
+    except requests.exceptions.HTTPError as e:
+        return "failed", f"the server answered {e.response.status_code}"
+    except requests.exceptions.ConnectionError:
+        return "failed", "couldn't connect"
+    except requests.exceptions.Timeout:
+        return "failed", "timed out"
+    except ValueError:
+        return "failed", "the reply wasn't valid JSON"
+    except Exception as e:
+        return "failed", type(e).__name__
+
+
+def check_for_update() -> dict:
+    """{'latest_version', 'download_url'} if something newer exists, else
+    None (including when the check fails). For callers that only care
+    whether to announce an update; see check_for_update_status()."""
+    status, detail = check_for_update_status()
+    return detail if status == "update" else None
 
 
 def fetch_my_status() -> dict:

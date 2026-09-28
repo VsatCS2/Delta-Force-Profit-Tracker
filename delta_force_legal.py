@@ -30,9 +30,11 @@ DISCLAIMER_PARAGRAPHS = [
     "entirely at your own risk, including any risk to your account.",
 
     "The community leaderboard is optional and opt-in. If you join, your "
-    "display name, summary stats, and an account identifier (stored by the "
-    "server only as a one-way hash) are sent to a server run by this tool's "
-    "author. You can leave and delete that data any time.",
+    "display name, summary stats (all-time and today's), and an account "
+    "identifier (stored by the server only as a one-way hash) are sent to a "
+    "server run by this tool's author, and kept up to date automatically "
+    "while you're opted in. You can turn that off, or leave and delete "
+    "your data, any time.",
 
     "Provided \"as is\", without warranty of any kind. Full terms are in "
     "Settings > About & Legal.",

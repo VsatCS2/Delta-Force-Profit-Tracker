@@ -23,11 +23,10 @@ risk to your game account. If you are unsure, don't use it.
 
 ## Your data
 
-- Everything DF Tracker fetches is stored locally on your computer.
-- The community leaderboard is **optional and opt-in**. If you join, your
-  display name, summary stats, and an account identifier (stored by the server
-  only as a one-way hash) are sent to a server run by this tool's author. You
-  can leave and delete that data at any time from the Community tab.
+* Everything DF Tracker fetches is stored locally on your computer.
+* The community leaderboard is **optional and opt-in**. If you join, your
+display name, summary stats (all-time and today's), and an account identifier (stored by the server
+only as a one-way hash) are sent to a server run by this tool's author, and are kept up to date automatically while you're opted in. You can turn that off, or leave and delete that data, at any time from the Community tab.
 
 ## No warranty
 
@@ -38,4 +37,5 @@ of this software.
 ## Rights holders
 
 If you represent a rights holder and have a concern about this project, please
-contact [YOUR CONTACT EMAIL] and it will be addressed promptly.
+contact zenithclaire5@gmail.com and it will be addressed promptly.
+

@@ -24,7 +24,7 @@ import sys
 import threading
 import tkinter as tk
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tkinter import ttk, messagebox
 
@@ -124,6 +124,9 @@ class TrackerApp:
         self._community_busy = False       # link/sync in flight
         self._community_leaderboard = []   # last fetched leaderboard rows
         self._community_status = None      # last fetch_my_status() result
+        self.community_period = "all"      # "all" | "daily" - which board is showing
+        self._community_meta = {}          # period/day/resets_at from the server
+        self._last_auto_sync = datetime.min
         self.community_sort_key = "net"
         self.community_sort_reverse = True
 
@@ -185,6 +188,7 @@ class TrackerApp:
         self.root.after(400, lambda: self.start_asset_calendar_fetch(silent=True))
         self.root.after(450, lambda: self.start_weekly_report_fetch(silent=True))
         self.root.after(700, self._start_update_check)
+        self.root.after(2500, self._community_startup_check)
         self.root.after(1000, self._repair_startup_entry)
         self.root.after(200, self._poll_avatars)
         self.root.after(300, self._startup_gate)
@@ -1662,6 +1666,21 @@ class TrackerApp:
             font=("Segoe UI", 10), anchor="w",
         ).pack(side="left")
 
+        auto_row = tk.Frame(self._community_linked, bg=c["SURFACE"])
+        auto_row.pack(fill="x", pady=(4, 0))
+        self.community_autosync_var = tk.BooleanVar(
+            value=self.settings.get("community_auto_sync", True))
+        tk.Checkbutton(
+            auto_row, text="Keep my stats up to date automatically "
+                           "(after each match refresh)",
+            variable=self.community_autosync_var,
+            command=self._on_community_autosync_toggle,
+            background=c["SURFACE"], foreground=c["FG"],
+            activebackground=c["SURFACE"], activeforeground=c["FG"],
+            selectcolor=c["SURFACE_ALT"], highlightthickness=0, borderwidth=0,
+            font=("Segoe UI", 10), anchor="w",
+        ).pack(side="left")
+
         btn_row = tk.Frame(self._community_linked, bg=c["SURFACE"])
         btn_row.pack(fill="x", pady=(14, 0))
         self.community_sync_btn = self._pill_button(
@@ -1684,23 +1703,42 @@ class TrackerApp:
         # ---- Leaderboard ----
         board_head = tk.Frame(inner, bg=c["BG_TOP"])
         board_head.pack(fill="x", pady=(0, 10))
-        tk.Label(board_head, text="Leaderboard", bg=c["BG_TOP"], fg=c["FG"],
-                 font=("Segoe UI Semibold", 14)).pack(side="left")
+        self.community_board_title = tk.Label(
+            board_head, text="Leaderboard", bg=c["BG_TOP"], fg=c["FG"],
+            font=("Segoe UI Semibold", 14))
+        self.community_board_title.pack(side="left")
         self.community_refresh_btn = self._pill_button(
             board_head, "Refresh", self.start_community_leaderboard_fetch,
             primary=False)
         self.community_refresh_btn.pack(side="right")
+        self.community_period_var = tk.StringVar(value="All-Time")
+        period_combo = ttk.Combobox(
+            board_head, textvariable=self.community_period_var,
+            values=["All-Time", "Today"], state="readonly", width=9)
+        period_combo.pack(side="right", padx=(0, 10))
+        period_combo.bind("<<ComboboxSelected>>",
+                          lambda e: self._on_community_period_change())
+        self.community_period_note = tk.Label(
+            inner, text="", bg=c["BG_TOP"], fg=c["FG_MUTED"],
+            font=("Segoe UI", 9), anchor="w", justify="left")
+        self.community_period_note.bind(
+            "<Configure>", lambda e: e.widget.configure(wraplength=e.width))
 
         board_card = Card(inner, c, padding=(4, 4), radius=14, shadow=False)
         board_card.pack(fill="both", expand=True)
+        self.community_board_card = board_card  # the daily note packs just above it
 
         columns = [
             ("rank", "#"), ("player", "Player"), ("net", "Net Income"),
             ("matches", "Matches"), ("wl", "W-L"), ("winrate", "Win Rate"),
             ("map", "Best Map"), ("operator", "Best Operator"),
         ]
-        widths = {"rank": 36, "player": 140, "net": 110, "matches": 70,
-                  "wl": 60, "winrate": 80, "map": 130, "operator": 120}
+        # These add up to ~600px: the space the table actually gets at
+        # normal window sizes (the previous set added up to ~750px, so
+        # headers and the "credits" suffix were being cut off). stretch=True
+        # below lets them grow into a wider window instead.
+        widths = {"rank": 28, "player": 96, "net": 104, "matches": 66,
+                  "wl": 46, "winrate": 66, "map": 84, "operator": 100}
         anchors = {"rank": "center", "player": "w", "net": "e",
                    "matches": "center", "wl": "center", "winrate": "center",
                    "map": "w", "operator": "w"}
@@ -1711,7 +1749,7 @@ class TrackerApp:
         for cid, _ in columns:
             self.community_tree.heading(cid, text="", anchor=anchors[cid])
             self.community_tree.column(cid, width=widths[cid],
-                                       anchor=anchors[cid])
+                                       anchor=anchors[cid], stretch=True)
         make_sortable(self.community_tree, columns, self._on_community_sort,
                       initial_col="net", initial_reverse=True)
         self.community_tree.pack(fill="both", expand=True, side="left")
@@ -1770,9 +1808,28 @@ class TrackerApp:
         for iid in tree.get_children():
             tree.delete(iid)
 
+        def row_net(p):
+            # Daily rows carry net_income; all-time rows net_income_all_time.
+            return p.get("net_income", p.get("net_income_all_time", 0))
+
+        daily = self.community_period == "daily"
+        self.community_board_title.configure(
+            text="Today's Leaderboard" if daily else "Leaderboard")
+        if daily:
+            left = self._format_time_until(self._community_meta.get("resets_at"))
+            note = ("Ranked on today's matches only, one shared day for "
+                    "everyone (UTC)." + (f" Resets in {left}." if left else "")
+                    + " You appear once you've played a match today and "
+                      "your stats have synced.")
+            self.community_period_note.configure(text=note)
+            self.community_period_note.pack(fill="x", pady=(0, 8),
+                                            before=self.community_board_card)
+        else:
+            self.community_period_note.pack_forget()
+
         key_fns = {
             "player": lambda p: (p.get("display_name") or "").lower(),
-            "net": lambda p: p.get("net_income_all_time", 0),
+            "net": row_net,
             "matches": lambda p: p.get("matches", 0),
             "wl": lambda p: p.get("wins", 0) - p.get("losses", 0),
             "winrate": lambda p: p.get("win_rate", 0),
@@ -1787,7 +1844,7 @@ class TrackerApp:
             tree.insert("", "end", values=(
                 i,
                 p.get("display_name") or "—",
-                core.fmt_money(p.get("net_income_all_time", 0)),
+                f"{int(row_net(p)):,}",  # bare number: "credits" on every row just clipped
                 p.get("matches", 0),
                 f"{p.get('wins', 0)}-{p.get('losses', 0)}",
                 f"{p.get('win_rate', 0):.1f}%",
@@ -2477,6 +2534,7 @@ class TrackerApp:
 
         self._refresh_data_stats()
         self._schedule_next_auto_refresh()
+        self._maybe_auto_sync()
 
     def _on_auto_refresh_error(self, err):
         self.set_status(f"Auto-refresh failed: {err}")
@@ -4253,13 +4311,82 @@ class TrackerApp:
             self.msg_queue.put(("community_unlink_error", str(e)))
 
     def start_community_leaderboard_fetch(self):
+        # Period is read here, on the UI thread, and carried through: the
+        # person can flip the dropdown while a request is in flight, and a
+        # slow reply for the board they just left must not overwrite the
+        # one they're now looking at.
         threading.Thread(target=self._community_leaderboard_worker,
-                         daemon=True).start()
+                         args=(self.community_period,), daemon=True).start()
 
-    def _community_leaderboard_worker(self):
-        players = comm.fetch_leaderboard()
+    def _community_leaderboard_worker(self, period="all"):
+        players, meta = comm.fetch_leaderboard_full(period=period)
         status = comm.fetch_my_status() if comm.is_linked() else None
-        self.msg_queue.put(("community_leaderboard_done", (players, status)))
+        self.msg_queue.put(("community_leaderboard_done",
+                            (players, status, meta, period)))
+
+    def _on_community_period_change(self):
+        self.community_period = ("daily" if self.community_period_var.get() == "Today"
+                                 else "all")
+        self._community_leaderboard = []   # don't show one board's rows under the other's title
+        self._community_meta = {}
+        self._render_community_leaderboard()
+        self.start_community_leaderboard_fetch()
+
+    @staticmethod
+    def _format_time_until(iso_utc):
+        """'2026-09-29T00:00:00Z' -> '5h 12m' (or '12m'); '' if unusable."""
+        try:
+            target = datetime.strptime(iso_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return ""
+        secs = int((target - datetime.now(timezone.utc)).total_seconds())
+        if secs <= 0:
+            return "moments"
+        hours, rem = divmod(secs, 3600)
+        return f"{hours}h {rem // 60}m" if hours else f"{max(1, rem // 60)}m"
+
+    # ---- automatic stat updates while opted in ----
+    def _community_startup_check(self):
+        """Learn the opted-in state at launch (a small authenticated
+        request) so auto-sync can work without the Community tab having
+        been opened first. No-op unless already joined."""
+        if comm.is_linked():
+            self.start_community_leaderboard_fetch()
+
+    def _maybe_auto_sync(self):
+        """Called after match data refreshes. Sends only when ALL hold:
+        the setting is on, this device is joined, the server says the
+        player is opted in (known from the last status fetch - never
+        assumed), no manual sync is running, and at least two minutes
+        have passed since the last one (auto-refresh can fire in bursts)."""
+        if not self.settings.get("community_auto_sync", True):
+            return
+        if not comm.is_linked() or self._community_busy:
+            return
+        if not (self._community_status or {}).get("opted_in"):
+            return
+        if (datetime.now() - self._last_auto_sync).total_seconds() < 120:
+            return
+        self._last_auto_sync = datetime.now()
+        self._start_auto_sync()
+
+    def _start_auto_sync(self):
+        threading.Thread(target=self._auto_sync_worker, daemon=True).start()
+
+    def _auto_sync_worker(self):
+        try:
+            comm.sync_stats(self.rows, self.profile_data)
+            self.msg_queue.put(("community_auto_sync_done", None))
+        except comm.LinkExpiredError:
+            self.msg_queue.put(("community_auto_sync_expired", None))
+        except Exception:
+            pass  # background courtesy: never pop an error over someone's game
+
+    def _on_community_autosync_toggle(self):
+        value = bool(self.community_autosync_var.get())
+        self.settings["community_auto_sync"] = value
+        _save_settings({"community_auto_sync": value})
 
     def _start_update_check(self, manual: bool = False):
         """manual=True (the Settings button) always reports back, even
@@ -4273,8 +4400,8 @@ class TrackerApp:
                          args=(manual,), daemon=True).start()
 
     def _update_check_worker(self, manual: bool):
-        info = comm.check_for_update()
-        self.msg_queue.put(("update_check_done", (info, manual)))
+        status, detail = comm.check_for_update_status()
+        self.msg_queue.put(("update_check_done", (status, detail, manual)))
 
     def _on_community_optin_toggle(self):
         value = self.community_optin_var.get()
@@ -4323,6 +4450,7 @@ class TrackerApp:
                     self._set_busy(match=False, quick=False)
                     self._refresh_data_stats()
                     self._schedule_next_auto_refresh()
+                    self._maybe_auto_sync()
                 elif kind == "auto_done":
                     self._on_auto_refresh_done(payload)
                 elif kind == "auto_error":
@@ -4417,14 +4545,24 @@ class TrackerApp:
                     self._set_community_busy(False)
                     messagebox.showerror("Unlink failed", payload, parent=self.root)
                 elif kind == "community_leaderboard_done":
-                    players, status = payload
-                    self._community_leaderboard = players
+                    players, status, meta, period = payload
+                    # status is about the account, not the board - always keep it
                     self._community_status = status
-                    self._render_community_leaderboard()
+                    if period == self.community_period:
+                        self._community_leaderboard = players
+                        self._community_meta = meta
+                        self._render_community_leaderboard()
+                    self._refresh_community_status_ui()
+                elif kind == "community_auto_sync_done":
+                    if self.active_section == "community":
+                        self.start_community_leaderboard_fetch()
+                elif kind == "community_auto_sync_expired":
+                    self._community_status = None
                     self._refresh_community_status_ui()
                 elif kind == "update_check_done":
-                    info, manual = payload
-                    if info:
+                    status, detail, manual = payload
+                    if status == "update":
+                        info = detail
                         latest = info.get("latest_version", "?")
                         url = info.get("download_url") or ""
                         msg = f"Version {latest} is available (you're on {APP_VERSION})."
@@ -4434,11 +4572,20 @@ class TrackerApp:
                         if hasattr(self, "update_status_label"):
                             self.update_status_label.configure(
                                 text=msg, fg=self.colors["ACCENT_HI"])
-                    elif manual:
-                        if hasattr(self, "update_status_label"):
+                    elif manual and hasattr(self, "update_status_label"):
+                        if status == "current":
                             self.update_status_label.configure(
                                 text=f"You're on the latest version ({APP_VERSION}).",
                                 fg=self.colors["POSITIVE"])
+                        elif status == "failed":
+                            self.update_status_label.configure(
+                                text=f"Couldn't check for updates ({detail}). "
+                                     "Check UPDATE_INFO_URL in delta_force_config.py.",
+                                fg=self.colors["NEGATIVE"])
+                        else:
+                            self.update_status_label.configure(
+                                text="Update checking isn't set up in this build.",
+                                fg=self.colors["FG_MUTED"])
                 elif kind == "community_optin_done":
                     self.set_status("Leaderboard visibility updated.")
                     self.start_community_leaderboard_fetch()

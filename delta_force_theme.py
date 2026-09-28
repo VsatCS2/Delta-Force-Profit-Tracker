@@ -125,6 +125,11 @@ DEFAULT_SETTINGS = {
     # True once the person has clicked through the first-run disclaimer.
     # Existing installs upgrading into this start False, so they see it once.
     "disclaimer_accepted": False,
+    # While joined AND opted in, quietly push fresh stats after each match
+    # refresh so the daily leaderboard reflects today rather than whenever
+    # "Sync My Stats Now" was last clicked. Never sends anything for someone
+    # who isn't opted in, whatever this says.
+    "community_auto_sync": True,
 }
 
 

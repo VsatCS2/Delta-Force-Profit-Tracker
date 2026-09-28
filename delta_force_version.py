@@ -17,7 +17,7 @@ version is older than the current one - keep each line short, plain,
 and user-facing (not a commit log).
 """
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 
 def version_tuple(v: str):
@@ -33,6 +33,10 @@ def version_tuple(v: str):
 
 
 CHANGELOG = {
+    "1.2.0": [
+        "New: Today's leaderboard — switch the Community tab to \"Today\" to see how you stack up against other players on today's matches alone; it resets at 00:00 UTC for everyone",
+        "Improved: while you're joined and opted in, your leaderboard stats now update automatically after each match refresh (turn this off in the Community tab)",
+    ],
     "1.1.0": [
         "New: Session tracking — track a play session separately from calendar days, so late-night sessions don't get split across two days",
         "New: Desktop overlay — a quick-glance HUD for today's or your session's profit, best raid, and top loot, toggled with a global hotkey",
