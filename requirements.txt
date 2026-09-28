@@ -1,0 +1,5 @@
+requests>=2.31
+Pillow>=10.0
+pypresence>=4.3
+playwright>=1.40
+pystray>=0.19
