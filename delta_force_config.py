@@ -17,4 +17,4 @@ SERVER_URL = "https://dfstatscl-production.up.railway.app"
 # version.json in your GitHub repo:
 #   https://raw.githubusercontent.com/YOUR-USERNAME/YOUR-REPO/main/version.json
 # Leave "" to turn update checks off (or to fall back on SERVER_URL + "/version").
-UPDATE_INFO_URL = ""
+UPDATE_INFO_URL = "https://raw.githubusercontent.com/VsatCS2/Delta-Force-Profit-Tracker/refs/heads/main/version.json"
