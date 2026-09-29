@@ -126,15 +126,35 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _utc_today() -> str:
-    """The daily leaderboard's day: a UTC calendar date, the same moment of
-    reset for every player wherever they are."""
-    return _utc_now().strftime("%Y-%m-%d")
+def _parse_reset_hour() -> int:
+    try:
+        hour = int(os.environ.get("DAILY_RESET_HOUR_UTC", "0"))
+    except ValueError:
+        return 0
+    return hour if 0 <= hour <= 23 else 0
+
+
+# The UTC hour (0-23) at which the daily leaderboard resets. There is no
+# single reset time that suits every timezone: 0 (midnight UTC) is a quiet
+# early morning in Southeast Asia but lands in the evening for the US.
+# Pick the hour that is roughly 4 AM where most of your players are:
+#   most players in US Eastern -> 8,  US Pacific -> 11,
+#   UK/Europe (summer) -> 2,  Singapore/Philippines -> 20.
+# Set it as an environment variable (DAILY_RESET_HOUR_UTC) on the host.
+DAILY_RESET_HOUR_UTC = _parse_reset_hour()
+
+
+def _current_day() -> str:
+    """The daily leaderboard's day label: the UTC date on which the current
+    "game day" began. A game day runs from DAILY_RESET_HOUR_UTC to the same
+    hour the next day, identical for every player wherever they are."""
+    return (_utc_now() - timedelta(hours=DAILY_RESET_HOUR_UTC)).strftime("%Y-%m-%d")
 
 
 def _next_reset_iso() -> str:
-    nxt = (_utc_now() + timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0)
+    shifted = _utc_now() - timedelta(hours=DAILY_RESET_HOUR_UTC)
+    nxt = (shifted.replace(hour=0, minute=0, second=0, microsecond=0)
+           + timedelta(days=1, hours=DAILY_RESET_HOUR_UTC))
     return nxt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -318,6 +338,11 @@ class StatsPayload(BaseModel):
     # The daily net cap is far below the all-time one - a real day's net
     # is a small fraction of it, so this only keeps absurd values off the board.
     daily_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    # The reset hour the client bucketed with. If it isn't the server's, the
+    # totals were computed over the wrong 24 hours even when the date label
+    # happens to match, so they are refused (and the reply says what hour to
+    # use). Absent = an older client = the original midnight-UTC day (0).
+    daily_reset_hour: Optional[int] = Field(None, ge=0, le=23)
     daily_net_income: int = Field(0, ge=-2_000_000_000, le=2_000_000_000)
     daily_matches: int = Field(0, ge=0, le=5_000)
     daily_wins: int = Field(0, ge=0, le=5_000)
@@ -375,8 +400,10 @@ def sync_stats(payload: StatsPayload, request: Request,
         )
         # A stale or wrong-clock date is ignored rather than stored: it
         # would either never show (yesterday) or sit on tomorrow's board.
+        client_hour = payload.daily_reset_hour if payload.daily_reset_hour is not None else 0
         daily_accepted = (payload.daily_date is not None
-                          and payload.daily_date == _utc_today())
+                          and payload.daily_date == _current_day()
+                          and client_hour == DAILY_RESET_HOUR_UTC)
         if daily_accepted:
             conn.execute(
                 """UPDATE stats SET daily_date=?, daily_net_income=?,
@@ -387,7 +414,8 @@ def sync_stats(payload: StatsPayload, request: Request,
                  payload.daily_matches, payload.daily_wins,
                  payload.daily_losses, payload.daily_best_map,
                  payload.daily_best_operator, u["id"]))
-    return {"ok": True, "daily_accepted": daily_accepted}
+    return {"ok": True, "daily_accepted": daily_accepted,
+            "day": _current_day(), "reset_hour_utc": DAILY_RESET_HOUR_UTC}
 
 
 @app.post("/opt-in")
@@ -445,7 +473,7 @@ def leaderboard(request: Request, sort: str = "net_income", limit: int = 50,
 
     if period == "daily":
         sort_col = _DAILY_SORT_COLUMNS.get(sort, _DAILY_SORT_COLUMNS["net_income"])
-        today = _utc_today()
+        today = _current_day()
         with db() as conn:
             rows = conn.execute(
                 f"""
@@ -465,6 +493,7 @@ def leaderboard(request: Request, sort: str = "net_income", limit: int = 50,
                 (today, limit),
             ).fetchall()
         return {"period": "daily", "day": today, "resets_at": _next_reset_iso(),
+                "reset_hour_utc": DAILY_RESET_HOUR_UTC,
                 "sort": sort, "players": [dict(r) for r in rows]}
 
     sort_col = _SORT_COLUMNS.get(sort, _SORT_COLUMNS["net_income"])
@@ -490,7 +519,8 @@ def health():
     # database_on_volume lets you confirm from a browser that a Railway
     # volume is really attached, without digging through logs.
     return {"ok": True, "service": "delta-force-tracker-community",
-            "database_on_volume": IS_ON_VOLUME}
+            "database_on_volume": IS_ON_VOLUME,
+            "daily_reset_hour_utc": DAILY_RESET_HOUR_UTC}
 
 
 # Optional: the desktop app can read its latest-version info from here
@@ -500,10 +530,17 @@ def health():
 # and is harmless. Changing an environment variable restarts the service.
 CURRENT_VERSION = os.environ.get("LATEST_VERSION", "1.2.0")
 DOWNLOAD_URL = os.environ.get("DOWNLOAD_URL", "")  # e.g. https://github.com/you/repo/releases/latest
+# A direct, downloadable release file - not the /releases/latest page above.
+# Format: https://github.com/you/repo/releases/download/TAG/FILENAME (a plain,
+# stable URL GitHub serves for every release asset - no API call needed to get
+# it). Powers auto-update (see delta_force_updater.py); leave blank and the app
+# just falls back to sending people to DOWNLOAD_URL to grab it themselves.
+ASSET_URL = os.environ.get("ASSET_URL", "")
 
 
 @app.get("/version")
 def version(request: Request):
     _enforce_rate_limit("read", _client_ip(request))
-    return {"latest_version": CURRENT_VERSION, "download_url": DOWNLOAD_URL}
+    return {"latest_version": CURRENT_VERSION, "download_url": DOWNLOAD_URL,
+            "asset_url": ASSET_URL}
 

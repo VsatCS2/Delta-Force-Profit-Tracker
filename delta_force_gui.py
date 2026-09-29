@@ -32,6 +32,7 @@ import delta_force_core as core
 import delta_force_community as comm
 import delta_force_overlay as overlay_mod
 import delta_force_startup as startup_mod
+import delta_force_updater as updater_mod
 import delta_force_legal as legal_mod
 from delta_force_paths import APP_DATA_DIR, migrate_legacy_file, resource_path
 from delta_force_version import APP_VERSION, CHANGELOG, version_tuple
@@ -127,6 +128,8 @@ class TrackerApp:
         self.community_period = "all"      # "all" | "daily" - which board is showing
         self._community_meta = {}          # period/day/resets_at from the server
         self._last_auto_sync = datetime.min
+        self._staged_update = None          # (version, staged_path) once downloaded+verified
+        self._update_download_busy = False
         self.community_sort_key = "net"
         self.community_sort_reverse = True
 
@@ -1100,6 +1103,28 @@ class TrackerApp:
         self.weekly_trend_canvas.bind(
             "<Configure>", lambda e: self._render_weekly_trend_chart())
 
+        tk.Frame(self.wh_content, bg=c["BORDER_SOFT"], height=1).pack(
+            fill="x", pady=(14, 14))
+
+        tk.Label(self.wh_content, text="MOST VALUABLE THIS WEEK", bg=c["SURFACE"],
+                 fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
+                 anchor="w").pack(fill="x")
+        self.wh_top_items_row = tk.Frame(self.wh_content, bg=c["SURFACE"])
+        self.wh_top_items_row.pack(fill="x", pady=(6, 0))
+
+        tk.Frame(self.wh_content, bg=c["BORDER_SOFT"], height=1).pack(
+            fill="x", pady=(14, 14))
+
+        tk.Label(self.wh_content, text="BEST RAID THIS WEEK", bg=c["SURFACE"],
+                 fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
+                 anchor="w").pack(fill="x")
+        self.wh_highlight_value_label = tk.Label(
+            self.wh_content, text="—", bg=c["SURFACE"], fg=c["FG"],
+            font=("Segoe UI Semibold", 14), anchor="w")
+        self.wh_highlight_value_label.pack(fill="x", pady=(2, 6))
+        self.wh_highlight_items_row = tk.Frame(self.wh_content, bg=c["SURFACE"])
+        self.wh_highlight_items_row.pack(fill="x")
+
         self._render_weekly_highlights()
 
     def _render_weekly_highlights(self):
@@ -1156,6 +1181,40 @@ class TrackerApp:
                    wh.get("worst_friend"))
 
         self._render_weekly_trend_chart()
+        self._render_item_strip(self.wh_top_items_row, wh.get("top_items") or [])
+        hv = wh.get("highlight_value", 0)
+        self.wh_highlight_value_label.configure(
+            text=core.fmt_money(hv) if hv else "No raid highlighted this week")
+        self._render_item_strip(self.wh_highlight_items_row, wh.get("highlight_items") or [])
+
+    def _render_item_strip(self, container, items):
+        """Up to 3 items side by side with icon + name only (no per-item
+        value - unlike Recent High-Value Items, these lists are bare item
+        IDs with no per-extraction value or count attached). Shared by
+        Weekly Highlights' "Most Valuable This Week" and "Best Raid This
+        Week" sections."""
+        c = self.colors
+        for w in container.winfo_children():
+            w.destroy()
+        if not items:
+            tk.Label(container, text="—", bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 9), anchor="w").pack(anchor="w")
+            return
+        for it in items:
+            col = tk.Frame(container, bg=c["SURFACE"])
+            col.pack(side="left", padx=(0, 18))
+            icon_label = tk.Label(col, bg=c["SURFACE"])
+            icon_label.pack()
+            photo = self._item_icon_cache.get(it["item_id"])
+            if photo:
+                icon_label.configure(image=photo)
+                icon_label.image = photo
+            else:
+                icon_label.configure(width=6, height=2)
+                self._queue_item_icon(it["item_id"], it["image_url"])
+            tk.Label(col, text=it["name"], bg=c["SURFACE"], fg=c["FG"],
+                     font=("Segoe UI", 9), anchor="w", wraplength=110,
+                     justify="left").pack()
 
     def _render_weekly_trend_chart(self):
         """7-day total stash value trend, from core.weekly_highlights()'s
@@ -1816,11 +1875,16 @@ class TrackerApp:
         self.community_board_title.configure(
             text="Today's Leaderboard" if daily else "Leaderboard")
         if daily:
-            left = self._format_time_until(self._community_meta.get("resets_at"))
-            note = ("Ranked on today's matches only, one shared day for "
-                    "everyone (UTC)." + (f" Resets in {left}." if left else "")
-                    + " You appear once you've played a match today and "
-                      "your stats have synced.")
+            meta = self._community_meta or {}
+            resets_at = meta.get("resets_at")
+            left = self._format_time_until(resets_at)
+            when = self._format_local_clock(resets_at)
+            note = "Ranked on today's matches only - one shared day for everyone."
+            if when:
+                note += f" Resets at {when} your time" + (f" (in {left})." if left else ".")
+            personal = self._daily_status_line(self._community_leaderboard, meta)
+            if personal:
+                note += "\n" + personal
             self.community_period_note.configure(text=note)
             self.community_period_note.pack(fill="x", pady=(0, 8),
                                             before=self.community_board_card)
@@ -2122,10 +2186,40 @@ class TrackerApp:
         update_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
         update_card.pack(fill="x", pady=(0, 6))
 
+        # Windows-and-frozen-only: this whole install mechanism replaces
+        # the running .exe (see delta_force_updater.py), which is only
+        # meaningful for the real built app, not a dev run of the source.
+        can_self_install = updater_mod.IS_WINDOWS and getattr(sys, "frozen", False)
+
+        self.autodownload_var = tk.BooleanVar(
+            value=self.settings.get("auto_download_updates", True))
+        autodownload_check = tk.Checkbutton(
+            update_card.body,
+            text="Automatically download updates in the background "
+                 "(never installs without asking)",
+            variable=self.autodownload_var, command=self._on_autodownload_toggle,
+            background=c["SURFACE"], foreground=c["FG"],
+            activebackground=c["SURFACE"], activeforeground=c["FG"],
+            selectcolor=c["SURFACE_ALT"], highlightthickness=0, borderwidth=0,
+            font=("Segoe UI", 10), anchor="w")
+        autodownload_check.pack(anchor="w", pady=(0, 10))
+        if not can_self_install:
+            autodownload_check.configure(state="disabled")
+
+        update_buttons = tk.Frame(update_card.body, bg=c["SURFACE"])
+        update_buttons.pack(anchor="w")
+
         self.check_updates_btn = self._pill_button(
-            update_card.body, "Check for Updates",
+            update_buttons, "Check for Updates",
             lambda: self._start_update_check(manual=True))
-        self.check_updates_btn.pack(anchor="w")
+        self.check_updates_btn.pack(side="left", padx=(0, 8))
+
+        self.install_update_btn = self._pill_button(
+            update_buttons, "Install Downloaded Update",
+            self._install_staged_update, primary=True)
+        self.install_update_btn.pack(side="left")
+        self.install_update_btn.set_state(
+            "normal" if (can_self_install and self._staged_update) else "disabled")
 
         self.update_status_label = tk.Label(
             update_card.body, text="", bg=c["SURFACE"], fg=c["FG_MUTED"],
@@ -4333,6 +4427,62 @@ class TrackerApp:
         self.start_community_leaderboard_fetch()
 
     @staticmethod
+    def _parse_utc_iso(iso_utc):
+        try:
+            return datetime.strptime(iso_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _format_local_clock(cls, iso_utc, with_date=False):
+        """A UTC timestamp as the viewer's own local time, e.g. '8:00 PM'
+        (or 'Sep 28, 8:00 PM'); '' if unusable. The reset time means
+        nothing to someone unless it's in their own clock."""
+        dt = cls._parse_utc_iso(iso_utc)
+        if dt is None:
+            return ""
+        local = dt.astimezone()
+        clock = local.strftime("%I:%M %p").lstrip("0")
+        return f"{local.strftime('%b')} {local.day}, {clock}" if with_date else clock
+
+    def _daily_status_line(self, players, meta):
+        """One sentence on why the signed-in player is or isn't on today's
+        board, worked out from their own local data - so an empty board
+        after a day of playing explains itself instead of looking broken.
+        Empty string when there's nothing useful to add."""
+        if not meta or not comm.is_linked():
+            return ""        # no successful fetch, or not joined: nothing reliable to say
+        me = ((comm.load_account() or {}).get("display_name") or "").strip().lower()
+        if me and any((p.get("display_name") or "").strip().lower() == me
+                      for p in players):
+            return ""        # they're on it
+        status = self._community_status
+        if status and status.get("opted_in") is False:
+            return ("You're not on this board because \"Show my stats on the "
+                    "public leaderboard\" is off.")
+
+        today = core.daily_stats_utc(self.rows, reset_hour=comm.daily_reset_hour())
+        end = self._parse_utc_iso(meta.get("resets_at"))
+        if today["matches"] == 0:
+            local_today = sum(1 for r in self.rows
+                              if r.get("date") == datetime.now().strftime("%Y-%m-%d"))
+            if local_today and end:
+                start_s = self._format_local_clock(
+                    (end - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"), True)
+                end_s = self._format_local_clock(meta.get("resets_at"), True)
+                many = local_today != 1
+                return (f"Today's board covers {start_s} to {end_s} (your time). "
+                        f"Your {local_today} match{'es' if many else ''} from earlier "
+                        f"today {'were' if many else 'was'} played before {start_s}, so "
+                        f"{'they count' if many else 'it counts'} toward yesterday's board.")
+            return "You haven't played a match in today's window yet."
+        n = today["matches"]
+        return (f"You have {n} match{'es' if n != 1 else ''} in today's window but "
+                "aren't on the board yet - your stats haven't synced. Click "
+                "Sync My Stats Now.")
+
+    @staticmethod
     def _format_time_until(iso_utc):
         """'2026-09-29T00:00:00Z' -> '5h 12m' (or '12m'); '' if unusable."""
         try:
@@ -4388,6 +4538,11 @@ class TrackerApp:
         self.settings["community_auto_sync"] = value
         _save_settings({"community_auto_sync": value})
 
+    def _on_autodownload_toggle(self):
+        value = bool(self.autodownload_var.get())
+        self.settings["auto_download_updates"] = value
+        _save_settings({"auto_download_updates": value})
+
     def _start_update_check(self, manual: bool = False):
         """manual=True (the Settings button) always reports back, even
         when there's nothing new, so a click gets real feedback instead
@@ -4398,6 +4553,100 @@ class TrackerApp:
                 text="Checking...", fg=self.colors["FG_MUTED"])
         threading.Thread(target=self._update_check_worker,
                          args=(manual,), daemon=True).start()
+
+    def _maybe_auto_download_update(self, info: dict):
+        """Starts a background download once an update's been detected -
+        never silently INSTALLS anything (that always needs an explicit
+        click on the "ready" dialog or the Settings button), just fetches
+        and stages it ahead of time so accepting the install is instant.
+        """
+        asset_url = (info or {}).get("asset_url") or ""
+        latest = (info or {}).get("latest_version", "")
+        if not asset_url or not self.settings.get("auto_download_updates", True):
+            return
+        if not updater_mod.IS_WINDOWS or not getattr(sys, "frozen", False):
+            return  # nothing to self-install on this platform/dev run
+        if self._update_download_busy:
+            return
+        if self._staged_update and self._staged_update[0] == latest:
+            return  # already downloaded this exact version
+        self._update_download_busy = True
+        threading.Thread(target=self._update_download_worker,
+                         args=(asset_url, latest), daemon=True).start()
+
+    def _update_download_worker(self, asset_url: str, version: str):
+        last_reported = [0]
+
+        def progress(downloaded, total):
+            # Throttled to roughly once per 2MB - on_progress fires every
+            # 256KB chunk, and posting a status-bar update that often
+            # would flood the queue for no visible benefit.
+            if downloaded - last_reported[0] >= 2_000_000 or downloaded == total:
+                last_reported[0] = downloaded
+                self.msg_queue.put(("update_download_progress", (downloaded, total)))
+        try:
+            zip_path = updater_mod.download_update(asset_url, on_progress=progress)
+            staged = updater_mod.stage_update(zip_path)
+            zip_path.unlink(missing_ok=True)
+            self.msg_queue.put(("update_ready", (version, staged)))
+        except updater_mod.UpdateError as e:
+            self.msg_queue.put(("update_download_failed", str(e)))
+        except Exception as e:
+            self.msg_queue.put(("update_download_failed", f"{type(e).__name__}: {e}"))
+
+    def _show_update_ready_dialog(self, version: str):
+        try:
+            c = self.colors
+            win = tk.Toplevel(self.root)
+            win.title("Update Ready")
+            win.configure(bg=c["BG_TOP"])
+            win.resizable(False, False)
+            win.transient(self.root)
+            win.geometry("420x1")
+
+            body = tk.Frame(win, bg=c["BG_TOP"], padx=28, pady=24)
+            body.pack(fill="both", expand=True)
+            tk.Label(body, text=f"Version {version} is ready to install",
+                     bg=c["BG_TOP"], fg=c["FG"], font=("Segoe UI Semibold", 14),
+                     anchor="w").pack(fill="x", pady=(0, 12))
+            tk.Label(body, text="The app will close and reopen automatically. "
+                                "This only takes a few seconds.",
+                     bg=c["BG_TOP"], fg=c["FG_DIM"], font=("Segoe UI", 10),
+                     anchor="w", justify="left", wraplength=364).pack(
+                fill="x", pady=(0, 20))
+
+            buttons = tk.Frame(body, bg=c["BG_TOP"])
+            buttons.pack(anchor="e")
+
+            def later():
+                win.destroy()  # the staged update stays available - see Settings
+
+            def install_now():
+                win.destroy()
+                self._install_staged_update()
+
+            self._pill_button(buttons, "Later", later).pack(side="left", padx=(0, 8))
+            self._pill_button(buttons, "Restart & Update", install_now,
+                              primary=True).pack(side="left")
+
+            win.update_idletasks()
+            w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+            win.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+
+    def _install_staged_update(self):
+        if not self._staged_update:
+            return
+        _version, staged_path = self._staged_update
+        try:
+            updater_mod.launch_installer_and_exit(staged_path)
+        except updater_mod.UpdateError as e:
+            messagebox.showerror("Couldn't start the update", str(e), parent=self.root)
+            return
+        self._on_close()  # normal clean shutdown; the launched script relaunches us
 
     def _update_check_worker(self, manual: bool):
         status, detail = comm.check_for_update_status()
@@ -4440,6 +4689,7 @@ class TrackerApp:
                     self._install_item_icon_bytes(item_id, data)
                     if self.active_section == "overview":
                         self._render_high_value_items()
+                        self._render_weekly_highlights()
                 elif kind == "done":
                     self.rows = core.build_rows(payload)
                     self._last_refresh_ts = datetime.now()
@@ -4553,6 +4803,12 @@ class TrackerApp:
                         self._community_meta = meta
                         self._render_community_leaderboard()
                     self._refresh_community_status_ui()
+                    # First moment the opted-in state is known after launch:
+                    # send current stats now, rather than waiting for the
+                    # next match refresh. (Otherwise updating the app and
+                    # opening the board sent nothing, so the daily board
+                    # stayed empty.) Same gates + 2-minute throttle apply.
+                    self._maybe_auto_sync()
                 elif kind == "community_auto_sync_done":
                     if self.active_section == "community":
                         self.start_community_leaderboard_fetch()
@@ -4572,6 +4828,7 @@ class TrackerApp:
                         if hasattr(self, "update_status_label"):
                             self.update_status_label.configure(
                                 text=msg, fg=self.colors["ACCENT_HI"])
+                        self._maybe_auto_download_update(info)
                     elif manual and hasattr(self, "update_status_label"):
                         if status == "current":
                             self.update_status_label.configure(
@@ -4586,6 +4843,25 @@ class TrackerApp:
                             self.update_status_label.configure(
                                 text="Update checking isn't set up in this build.",
                                 fg=self.colors["FG_MUTED"])
+                elif kind == "update_download_progress":
+                    downloaded, total = payload
+                    mb = downloaded / 1_000_000
+                    if total:
+                        self.set_status(f"Downloading update... {mb:.1f} / "
+                                        f"{total / 1_000_000:.1f} MB")
+                    else:
+                        self.set_status(f"Downloading update... {mb:.1f} MB")
+                elif kind == "update_ready":
+                    version, staged_path = payload
+                    self._update_download_busy = False
+                    self._staged_update = (version, staged_path)
+                    self.set_status(f"Update {version} downloaded and ready to install.")
+                    if hasattr(self, "install_update_btn"):
+                        self.install_update_btn.set_state("normal")
+                    self._show_update_ready_dialog(version)
+                elif kind == "update_download_failed":
+                    self._update_download_busy = False
+                    self.set_status(f"Update download failed: {payload}")
                 elif kind == "community_optin_done":
                     self.set_status("Leaderboard visibility updated.")
                     self.start_community_leaderboard_fetch()

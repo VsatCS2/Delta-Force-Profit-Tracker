@@ -17,7 +17,7 @@ version is older than the current one - keep each line short, plain,
 and user-facing (not a commit log).
 """
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 
 def version_tuple(v: str):
@@ -33,6 +33,11 @@ def version_tuple(v: str):
 
 
 CHANGELOG = {
+    "1.3.0": [
+        "New: the app can now download and install updates for you — no more manually re-downloading from GitHub",
+        "Fixed: the Discord Rich Presence icon showing a profit (green) arrow on a loss day when you hadn't played yet",
+        "Fixed: the weekly report endpoint, and Recent High-Value Items now also pulls from your weekly report as a second source",
+    ],
     "1.2.0": [
         "New: Today's leaderboard — switch the Community tab to \"Today\" to see how you stack up against other players on today's matches alone; it resets at 00:00 UTC for everyone",
         "Improved: while you're joined and opted in, your leaderboard stats now update automatically after each match refresh (turn this off in the Community tab)",

@@ -22,7 +22,7 @@ import json
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import requests
@@ -840,6 +840,10 @@ def _post_json(url: str, params: dict, body: dict, on_debug=None) -> dict:
     except requests.exceptions.ConnectionError as e:
         raise RuntimeError(f"Could not connect to the API at all: {e}")
 
+    return _handle_json_response(resp, dbg)
+
+
+def _handle_json_response(resp, dbg):
     dbg(f"HTTP {resp.status_code}")
     dbg(f"response headers: {dict(resp.headers)}")
     dbg(f"raw body: {resp.text[:2000]}")
@@ -864,6 +868,42 @@ def _post_json(url: str, params: dict, body: dict, on_debug=None) -> dict:
             "(--login / Log In button) for fresh credentials."
         )
     return payload["data"]
+
+
+def _get_json(url: str, params: dict, on_debug=None) -> dict:
+    """GET counterpart to _post_json, for endpoints confirmed to need no
+    signed params or request body at all (see fetch_weekly_report) -
+    shares the same header selection, timeout handling, and error/rate-
+    limit parsing via _handle_json_response."""
+    def dbg(msg):
+        if _debug and on_debug:
+            on_debug(msg)
+
+    refresh_credentials_from_browser()
+    endpoint_key = _endpoint_key(url)
+    headers = _headers_for(endpoint_key)
+
+    dbg(f"GET {url}")
+    dbg(f"params: {params}")
+    dbg(f"headers (source: "
+        f"{'capture' if endpoint_key in (_dftools_state.get('headers_by_endpoint') or {}) else 'fallback'}): "
+        f"{headers}")
+
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=(10, 20))
+    except requests.exceptions.ConnectTimeout:
+        raise RuntimeError(
+            "Connection timed out reaching the API. A firewall, VPN, proxy, or "
+            "antivirus may be blocking the request."
+        )
+    except requests.exceptions.ReadTimeout:
+        raise RuntimeError("Connected, but the server never responded in time.")
+    except requests.exceptions.SSLError as e:
+        raise RuntimeError(f"SSL/TLS error talking to the API: {e}")
+    except requests.exceptions.ConnectionError as e:
+        raise RuntimeError(f"Could not connect to the API at all: {e}")
+
+    return _handle_json_response(resp, dbg)
 
 
 def fetch_page(page: int, page_size: int = PAGE_SIZE, on_debug=None) -> dict:
@@ -967,23 +1007,19 @@ def fetch_weekly_report(on_debug=None) -> dict:
     refresh_credentials_from_browser()
     require_credentials("weeklyreport")
 
+    # GET, six plain fields, no u/a/ts/s signature and no request body at
+    # all - confirmed working this way against the live API (unlike every
+    # other endpoint here, which needs a full signed POST). Kept as its
+    # own thing rather than folded into the general shape, since the other
+    # endpoints have NOT been confirmed to accept this and shouldn't be
+    # assumed to.
     c = _resolve_credentials("weeklyreport")
     params = {
-        "openid": c["openid"], "token": c["token"], "game_id": c["game_id"],
-        "channel": c["channel"], "account_type": c["account_type"], "lang_type": c["lang_type"],
-        "u": c["u"], "a": c["a"], "ts": c["ts"], "s": c["s"],
-    }
-    # Unlike the other endpoints' bodies, the captured sample for this one
-    # includes "channel" in the POST body too, not just the query string -
-    # kept faithful to what was actually observed working rather than
-    # assumed to match the others' shape.
-    body = {
-        "needLogin": True,
         "openid": c["openid"], "token": c["token"], "game_id": c["game_id"],
         "channel": c["channel"], "account_type": c["account_type"],
         "lang_type": c["lang_type"],
     }
-    return _post_json(WEEKLYREPORT_URL, params, body, on_debug=on_debug)
+    return _get_json(WEEKLYREPORT_URL, params, on_debug=on_debug)
 
 
 def fetch_match_detail(room_id: str, on_debug=None) -> dict:
@@ -1381,12 +1417,38 @@ def weekly_highlights(cache: dict = None) -> dict:
     evac_rate = data.get("exacuation_rate")  # API's own typo, not ours
     kd_rate = data.get("kd_rate")
 
+    def _items(id_list):
+        # These lists are bare item IDs with no per-extraction value or
+        # count attached (unlike GetAssetWeekCalendar's carry_out_items) -
+        # "value" here is the item catalog's own reference value, not
+        # what this specific extraction was actually worth.
+        out = []
+        for item_id in (id_list or [])[:3]:
+            info = describe_item(str(item_id))
+            out.append({
+                "item_id": str(item_id), "name": info["name"],
+                "grade": info["grade"], "image_url": info["image_url"],
+                "value": info["value"],
+            })
+        return out
+
+    highlight_value = data.get("highlight_max_gainedprice_gainedprice")
+
     return {
         "evac_rate": float(evac_rate) if evac_rate is not None else None,  # 0.0-1.0
         "kd_rate": float(kd_rate) if kd_rate is not None else None,
         "best_friend": _friend("best_friend"),
         "worst_friend": _friend("worst_friend"),
         "trend": trend,  # oldest first, [{date: "YYYYMMDD", value: int}, ...]
+        # This week's most valuable extracted items, and separately the
+        # items from this week's single best raid (the "Highlight Match" /
+        # "Million Extract" section of the real weekly report) - a
+        # reliable source of "recent valuable loot" independent of
+        # GetAssetWeekCalendar, which can come back empty even when these
+        # are populated.
+        "top_items": _items(data.get("most_valuable_collection_id_list")),
+        "highlight_items": _items(data.get("highlight_most_valuable_collection_id_list")),
+        "highlight_value": int(highlight_value) if highlight_value else 0,
     }
 
 
@@ -1519,7 +1581,7 @@ def best_map_and_operator(rows: list) -> tuple:
     return best_map, best_op
 
 
-def daily_stats_utc(rows: list, now=None) -> dict:
+def daily_stats_utc(rows: list, now=None, reset_hour: int = 0) -> dict:
     """Totals for the current UTC calendar day - what the community
     daily leaderboard ranks on.
 
@@ -1529,13 +1591,20 @@ def daily_stats_utc(rows: list, now=None) -> dict:
     racing over different 24 hours. Each match's local timestamp is
     converted to UTC before it's bucketed; `now` (a timezone-aware UTC
     datetime) exists so tests can pin the clock.
+
+    reset_hour is the UTC hour the server's daily board resets at (see
+    server/app.py DAILY_RESET_HOUR_UTC); a "day" is the 24 hours from that
+    hour, labelled by the UTC date it began on. Must match the server's or
+    the totals cover the wrong 24 hours - the server refuses a mismatch and
+    the client relearns the hour (see delta_force_community.sync_stats).
     """
     now = now or datetime.now(timezone.utc)
-    day = now.strftime("%Y-%m-%d")
+    shift = timedelta(hours=reset_hour)
+    day = (now - shift).strftime("%Y-%m-%d")
     today = []
     for r in rows or []:
         try:
-            if r["datetime"].astimezone(timezone.utc).strftime("%Y-%m-%d") == day:
+            if (r["datetime"].astimezone(timezone.utc) - shift).strftime("%Y-%m-%d") == day:
                 today.append(r)
         except (OverflowError, OSError, ValueError):
             continue  # an unconvertible timestamp just doesn't count

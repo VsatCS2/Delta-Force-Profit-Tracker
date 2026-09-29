@@ -234,6 +234,28 @@ def _best_map_and_operator(rows: list) -> tuple:
     return core.best_map_and_operator(rows)
 
 
+# The UTC hour the server's daily board resets at. Learned from server
+# replies (leaderboard fetches and sync responses); 0 until then, which is
+# also what every server before this setting existed used.
+_daily_reset_hour = 0
+
+
+def daily_reset_hour() -> int:
+    return _daily_reset_hour
+
+
+def _learn_reset_hour(data) -> bool:
+    """Adopt the server's reset hour if `data` carries a valid one.
+    Returns True if it changed."""
+    global _daily_reset_hour
+    hour = data.get("reset_hour_utc") if isinstance(data, dict) else None
+    if isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23 \
+            and hour != _daily_reset_hour:
+        _daily_reset_hour = hour
+        return True
+    return False
+
+
 def sync_stats(rows: list, profile: dict = None, timeout: int = _REQUEST_TIMEOUT_SECONDS) -> dict:
     """Uploads this player's current aggregate stats. rows is the same
     list core.build_rows() / the GUI's self.rows already holds; profile
@@ -264,21 +286,33 @@ def sync_stats(rows: list, profile: dict = None, timeout: int = _REQUEST_TIMEOUT
         "best_operator": best_operator,
         "rank_label": rank_label,
     }
-    # Today's totals (UTC day) for the daily leaderboard. An older server
-    # simply ignores these fields, so this is safe against any backend.
-    daily = core.daily_stats_utc(rows)
-    payload.update({
-        "daily_date": daily["day"],
-        "daily_net_income": int(daily["net_income"]),
-        "daily_matches": int(daily["matches"]),
-        "daily_wins": int(daily["wins"]),
-        "daily_losses": int(daily["losses"]),
-        "daily_best_map": daily["best_map"],
-        "daily_best_operator": daily["best_operator"],
-    })
-    resp = _request_authed("POST", f"{server_url}/stats/sync", json=payload,
-                           headers=headers, timeout=timeout)
-    return resp.json()
+    def send(hour: int) -> dict:
+        # Today's totals for the daily leaderboard. An older server simply
+        # ignores these fields, so this is safe against any backend.
+        daily = core.daily_stats_utc(rows, reset_hour=hour)
+        body = dict(payload)
+        body.update({
+            "daily_date": daily["day"],
+            "daily_reset_hour": hour,
+            "daily_net_income": int(daily["net_income"]),
+            "daily_matches": int(daily["matches"]),
+            "daily_wins": int(daily["wins"]),
+            "daily_losses": int(daily["losses"]),
+            "daily_best_map": daily["best_map"],
+            "daily_best_operator": daily["best_operator"],
+        })
+        resp = _request_authed("POST", f"{server_url}/stats/sync", json=body,
+                               headers=headers, timeout=timeout)
+        return resp.json()
+
+    used = _daily_reset_hour
+    result = send(used)
+    # The server refused the daily part because it resets at a different
+    # hour than we bucketed with: adopt its hour and send once more with
+    # the correct 24 hours. One retry only - never a loop.
+    if result.get("daily_accepted") is False and _learn_reset_hour(result):
+        result = send(_daily_reset_hour)
+    return result
 
 
 def fetch_leaderboard_full(sort: str = "net_income", limit: int = 50,
@@ -300,7 +334,9 @@ def fetch_leaderboard_full(sort: str = "net_income", limit: int = 50,
         )
         resp.raise_for_status()
         data = resp.json()
-        meta = {k: data[k] for k in ("period", "day", "resets_at") if k in data}
+        meta = {k: data[k] for k in ("period", "day", "resets_at", "reset_hour_utc")
+                if k in data}
+        _learn_reset_hour(data)
         return data.get("players", []), meta
     except Exception:
         return [], {}
@@ -330,7 +366,14 @@ def update_check_configured() -> bool:
 
 def check_for_update_status():
     """(status, detail). status is one of:
-      "update"       - detail is {'latest_version', 'download_url'}
+      "update"       - detail is {'latest_version', 'download_url',
+                       'asset_url'}. asset_url is a direct, downloadable
+                       release file (see delta_force_updater.py) and is
+                       "" if the release feed hasn't published one yet -
+                       older version.json files simply don't have this
+                       field, and that's a normal, supported state, not
+                       an error: callers fall back to pointing the
+                       person at download_url (a human page) instead.
       "current"      - the server answered; nothing newer
       "failed"       - couldn't check; detail is a short reason
       "unconfigured" - no URL set at all

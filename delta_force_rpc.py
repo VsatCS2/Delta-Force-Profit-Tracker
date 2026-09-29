@@ -181,9 +181,15 @@ def _build_payload(rows: list, profile: Optional[dict]) -> dict:
     today_matches = len(today_rows)
 
     # --- Line 1: profit (today, or all-time fallback) ---
+    # display_net is whichever figure ends up on screen - the icon below
+    # keys off THIS, not today_net directly, or a zero-matches day with a
+    # negative all-time total showed the win icon (today_net is 0, which
+    # is not < 0, even though the line actually displayed was negative).
     if today_matches:
+        display_net = today_net
         details_line = f"Today: {_abbrev_number(today_net)}"
     else:
+        display_net = all_net
         details_line = f"All-time: {_abbrev_number(all_net)}"
 
     # --- Line 2: W-L and rank ---
@@ -193,11 +199,9 @@ def _build_payload(rows: list, profile: Optional[dict]) -> dict:
     else:
         state_line = wl
 
-    # --- Large image picks win/loss variant ---
-    if today_matches and today_net < 0:
-        large_key = ASSET_LARGE_LOSS
-    else:
-        large_key = ASSET_LARGE_WIN
+    # --- Large image picks win/loss variant, matching whichever profit
+    # figure is actually shown on line 1 (see display_net above) ---
+    large_key = ASSET_LARGE_LOSS if display_net < 0 else ASSET_LARGE_WIN
 
     # large_text shows the nickname on hover.
     hover = nickname

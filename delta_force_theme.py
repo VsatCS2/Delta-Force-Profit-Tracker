@@ -122,6 +122,10 @@ DEFAULT_SETTINGS = {
     # or an existing one upgrading into it) apart from "already caught
     # up as of last launch".
     "last_seen_version": "",
+    # Background-downloads a detected update ahead of time so accepting
+    # the install is instant - never installs/replaces anything without
+    # an explicit click, regardless of this setting.
+    "auto_download_updates": True,
     # True once the person has clicked through the first-run disclaimer.
     # Existing installs upgrading into this start False, so they see it once.
     "disclaimer_accepted": False,
