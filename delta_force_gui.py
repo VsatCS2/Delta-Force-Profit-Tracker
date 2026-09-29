@@ -709,6 +709,18 @@ class TrackerApp:
     # First-run login prompt
     # ------------------------------------------------------------------
     def _maybe_prompt_login(self):
+        # have_credentials() only looks at the in-memory credential
+        # blocks, which start empty on every launch - they're populated
+        # by refresh_credentials_from_browser() reading dftools_creds.json
+        # off disk. The startup gate fires this prompt before any of the
+        # fetches (which are what normally trigger that refresh) have
+        # run, so without loading first this fired on every single launch
+        # for someone who was already logged in. current_openid() already
+        # uses this same load-before-check pattern; mirror it here.
+        try:
+            core.refresh_credentials_from_browser()
+        except Exception:
+            pass
         if core.have_credentials("matchlist"):
             return
 

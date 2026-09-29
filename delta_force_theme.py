@@ -101,7 +101,10 @@ DEFAULT_SETTINGS = {
     "auto_refresh_notify": False,
     "community_prompted": False,
     "overlay_enabled": False,
-    "overlay_hotkey": "Ctrl+Shift+D",  # matches delta_force_overlay.DEFAULT_HOTKEY_LABEL
+    # Any label parse_hotkey() accepts works here, not just the presets -
+    # a custom shortcut captured in Settings is stored in this same key.
+    # Default mirrors delta_force_overlay.DEFAULT_HOTKEY_LABEL.
+    "overlay_hotkey": "Ctrl+Shift+D",
     "minimize_to_tray": False,
     # start_on_boot mirrors delta_force_startup's registry Run-key state
     # (that module reads the registry directly as the source of truth -
