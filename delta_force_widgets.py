@@ -141,6 +141,165 @@ class GradientFrame(tk.Canvas):
                            width=w, height=h)
 
 
+class ToggleSwitch(tk.Canvas):
+    """A pill-shaped on/off switch, matching how `tk.Checkbutton` is
+    already used everywhere in this app: pass a BooleanVar and an
+    optional command, and it stays in sync the same way a real
+    Checkbutton would (including external var.set() calls updating the
+    drawn state, via the var's own trace).
+
+    Deliberately NOT the reference UI's card-corner placement - this app
+    uses row-based settings (checkbox-then-label), so this widget is
+    just the switch itself; callers place a Label next to it the same
+    way they already place one next to a Checkbutton, preserving the
+    existing reading order instead of restyling the whole layout.
+    """
+    WIDTH, HEIGHT = 40, 22
+
+    def __init__(self, master, palette, variable, command=None, **kwargs):
+        super().__init__(master, width=self.WIDTH, height=self.HEIGHT,
+                         highlightthickness=0, bd=0,
+                         bg=kwargs.pop("bg", master.cget("bg")), **kwargs)
+        self.palette = palette
+        self.var = variable
+        self.command = command
+        self._hover = False
+        self._enabled = True
+        self.configure(cursor="hand2")
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self._trace_id = self.var.trace_add("write", lambda *a: self._redraw())
+        self.bind("<Destroy>", self._on_destroy)
+        self._redraw()
+
+    def set_state(self, state: str):
+        """"normal" or "disabled" - same two values and the same method
+        name _pill_button's returned widget already uses elsewhere in
+        this app, for the same reason: a plain tk widget has no built-in
+        concept of "disabled" that a hand-drawn Canvas widget inherits
+        for free, so this app's custom widgets all expose their own
+        small, consistent state API instead of the real tk `state=`
+        option (which doesn't apply to Canvas in a way that would help
+        here anyway)."""
+        self._enabled = (state != "disabled")
+        self.configure(cursor="hand2" if self._enabled else "arrow")
+        self._redraw()
+
+    def _on_destroy(self, _event=None):
+        try:
+            self.var.trace_remove("write", self._trace_id)
+        except (tk.TclError, ValueError):
+            pass  # var already gone, or trace already cleared - either way, nothing left to clean up
+
+    def _set_hover(self, on: bool):
+        self._hover = on
+        self._redraw()
+
+    def _on_click(self, _event=None):
+        if not self._enabled:
+            return
+        self.var.set(not self.var.get())
+        if self.command:
+            self.command()
+
+    def _redraw(self):
+        self.delete("all")
+        c = self.palette
+        on = bool(self.var.get())
+        if not self._enabled:
+            track = c["SURFACE_ALT"]
+        else:
+            track = c["ACCENT"] if on else c["SURFACE_ACTIVE"]
+            if self._hover:
+                track = c["ACCENT_HI"] if on else c["SURFACE_HOVER"]
+        h = self.HEIGHT
+        round_rect(self, 1, 1, self.WIDTH - 1, h - 1, h / 2 - 1,
+                  fill=track, outline="")
+        knob_d = h - 8
+        knob_x = (self.WIDTH - 4 - knob_d) if on else 4
+        knob_color = c["FG_MUTED"] if not self._enabled else (c["FG"] if on else c["FG_DIM"])
+        self.create_oval(knob_x, 4, knob_x + knob_d, 4 + knob_d,
+                         fill=knob_color, outline="")
+
+
+class InfoIcon(tk.Canvas):
+    """A small "i" glyph that shows an explanatory tooltip on hover -
+    for the handful of numbers in this app whose meaning genuinely isn't
+    obvious from their label alone (see delta_force_gui.py's
+    _info_icon() for the specific, researched cases this is actually
+    used for; this class only knows how to draw itself and show
+    whatever text it's given).
+
+    Deliberately muted and small (14px) rather than a bright attention-
+    grabbing icon - the point is an available-if-wanted affordance next
+    to the few numbers that need one, not a UI element that competes
+    for attention with the number it's explaining.
+    """
+    SIZE = 14
+
+    def __init__(self, master, palette, text: str, **kwargs):
+        super().__init__(master, width=self.SIZE, height=self.SIZE,
+                         highlightthickness=0, bd=0,
+                         bg=kwargs.pop("bg", master.cget("bg")), **kwargs)
+        self.palette = palette
+        self.text = text
+        self._tooltip = None
+        self.configure(cursor="hand2")
+        self._draw(hover=False)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Destroy>", lambda e: self._hide())
+
+    def _draw(self, hover: bool):
+        self.delete("all")
+        c = self.palette
+        color = c["FG_DIM"] if hover else c["FG_MUTED"]
+        r = self.SIZE / 2
+        self.create_oval(1, 1, self.SIZE - 1, self.SIZE - 1,
+                         outline=color, width=1.2)
+        self.create_text(r, r - 1, text="i", fill=color,
+                         font=("Georgia", 9, "italic"))
+
+    def _on_enter(self, _event=None):
+        self._draw(hover=True)
+        self._show()
+
+    def _on_leave(self, _event=None):
+        self._draw(hover=False)
+        self._hide()
+
+    def _show(self):
+        if self._tooltip is not None:
+            return
+        try:
+            c = self.palette
+            win = tk.Toplevel(self.winfo_toplevel())
+            win.overrideredirect(True)
+            win.attributes("-topmost", True)
+            win.configure(bg=c["BORDER_SOFT"])
+            inner = tk.Frame(win, bg=c["SURFACE"])
+            inner.pack(padx=1, pady=1)
+            tk.Label(inner, text=self.text, bg=c["SURFACE"], fg=c["FG_DIM"],
+                     font=("Segoe UI", 9), justify="left", wraplength=260,
+                     padx=10, pady=7).pack()
+            win.update_idletasks()
+            x = self.winfo_rootx() + self.SIZE + 6
+            y = self.winfo_rooty() - (win.winfo_reqheight() // 2) + (self.SIZE // 2)
+            win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+            self._tooltip = win
+        except tk.TclError:
+            self._tooltip = None
+
+    def _hide(self):
+        if self._tooltip is not None:
+            try:
+                self._tooltip.destroy()
+            except tk.TclError:
+                pass
+            self._tooltip = None
+
+
 class Card(tk.Frame):
     def __init__(self, master, palette, padding=(22, 20), radius=14,
                  shadow=True, border=True):
@@ -269,6 +428,173 @@ def _draw_nav_icon(canvas: tk.Canvas, key: str, cx: float, cy: float,
         canvas.create_oval(cx_front - r_front, cy - r_front,
                            cx_front + r_front, cy + r_front,
                            fill=color, outline="")
+
+    # ---- Settings-card header badges (see delta_force_gui.py's
+    # section_title) - same primitives/stroke-width conventions as the
+    # nav icons above, just a wider vocabulary since there are more
+    # distinct card concepts than nav destinations. "profile_match"
+    # deliberately isn't here - that card reuses the "profile" icon
+    # above directly, since it's the same underlying concept (profile
+    # data), not a new glyph.
+    elif key == "auto_refresh":
+        # A single incomplete ring with one arrowhead at its leading
+        # edge - the standard single-arrow refresh glyph. A two-arrow
+        # "chasing" version was tried first and rendered as a near-solid
+        # blob at real badge size (tested at 40/80/160px) - this one
+        # holds up much better small.
+        import math
+        r = s * 0.9
+        start_deg = 35
+        canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
+                          start=start_deg, extent=280, style="arc",
+                          outline=color, width=2.3)
+        ang = math.radians(start_deg)
+        tip_x = cx + r * math.cos(ang)
+        tip_y = cy - r * math.sin(ang)
+        # arrowhead tangent to the circle at that point, pointing in the
+        # arc's direction of travel
+        tang = math.radians(start_deg + 90)
+        dx, dy = math.cos(tang), -math.sin(tang)
+        px, py = -dy, dx
+        head = s * 0.42
+        canvas.create_polygon(
+            tip_x + dx * head, tip_y + dy * head,
+            tip_x - dx * head * 0.35 + px * head * 0.55,
+            tip_y - dy * head * 0.35 + py * head * 0.55,
+            tip_x - dx * head * 0.35 - px * head * 0.55,
+            tip_y - dy * head * 0.35 - py * head * 0.55,
+            fill=color, outline="")
+
+    elif key == "notifications":
+        # Bell: a rounded triangle-ish body plus a small base line and clapper dot.
+        canvas.create_arc(cx - s * 0.8, cy - s * 0.9, cx + s * 0.8, cy + s * 0.5,
+                          start=20, extent=140, style="chord",
+                          fill=color, outline="")
+        canvas.create_line(cx - s * 0.95, cy + s * 0.5, cx + s * 0.95, cy + s * 0.5,
+                           fill=color, width=2, capstyle="round")
+        canvas.create_oval(cx - s * 0.18, cy + s * 0.75, cx + s * 0.18, cy + s * 1.1,
+                           fill=color, outline="")
+
+    elif key == "discord":
+        # A speech bubble, not the Discord brand mark itself (that's a
+        # trademarked logo) - this card is about broadcasting your
+        # status, which a generic chat bubble conveys without
+        # reproducing anyone's actual logo.
+        canvas.create_oval(cx - s * 1.0, cy - s * 0.85, cx + s * 1.0, cy + s * 0.55,
+                           fill=color, outline="")
+        canvas.create_polygon(
+            cx - s * 0.5, cy + s * 0.45, cx - s * 0.15, cy + s * 0.45,
+            cx - s * 0.55, cy + s * 1.05, fill=color, outline="")
+
+    elif key == "overlay":
+        # A window frame with a smaller window overlapping its corner -
+        # reads as "something floating on top of something else".
+        canvas.create_rectangle(cx - s * 1.05, cy - s * 0.75,
+                                cx + s * 0.55, cy + s * 0.75,
+                                outline=color, width=1.8)
+        canvas.create_rectangle(cx - s * 0.15, cy - s * 0.15,
+                                cx + s * 1.05, cy + s * 0.85,
+                                fill=color, outline=color, width=1.8)
+
+    elif key == "startup":
+        # The standard power-button glyph: a ring with a gap at the top,
+        # broken by a vertical line through it.
+        r = s * 0.85
+        canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
+                          start=55, extent=250, style="arc",
+                          outline=color, width=2.2)
+        canvas.create_line(cx, cy - r * 1.15, cx, cy - r * 0.1,
+                           fill=color, width=2.2, capstyle="round")
+
+    elif key == "updates":
+        # Download glyph: an arrow shaft pointing down into a tray.
+        canvas.create_line(cx, cy - s * 1.0, cx, cy + s * 0.3,
+                           fill=color, width=2.2, capstyle="round")
+        canvas.create_polygon(
+            cx - s * 0.5, cy - s * 0.15, cx + s * 0.5, cy - s * 0.15,
+            cx, cy + s * 0.45, fill=color, outline="")
+        canvas.create_line(cx - s * 0.95, cy + s * 0.95, cx + s * 0.95, cy + s * 0.95,
+                           fill=color, width=2, capstyle="round")
+
+    elif key == "about_legal":
+        # A simple page: a rectangle with two short text-line strokes -
+        # deliberately not a circled "i" (that's InfoIcon's glyph
+        # elsewhere in this app, for a different purpose - a tooltip
+        # trigger, not a section header - and reusing it here would
+        # blur that distinction).
+        canvas.create_rectangle(cx - s * 0.7, cy - s * 1.0, cx + s * 0.7, cy + s * 1.0,
+                                outline=color, width=1.8)
+        canvas.create_line(cx - s * 0.4, cy - s * 0.35, cx + s * 0.4, cy - s * 0.35,
+                           fill=color, width=1.6, capstyle="round")
+        canvas.create_line(cx - s * 0.4, cy + s * 0.1, cx + s * 0.4, cy + s * 0.1,
+                           fill=color, width=1.6, capstyle="round")
+        canvas.create_line(cx - s * 0.4, cy + s * 0.55, cx + s * 0.05, cy + s * 0.55,
+                           fill=color, width=1.6, capstyle="round")
+
+    elif key == "data_export":
+        # Same tray primitive as "updates", arrow pointing the opposite
+        # way (up, out of the tray) - export/save, not download.
+        canvas.create_line(cx, cy + s * 0.3, cx, cy - s * 1.0,
+                           fill=color, width=2.2, capstyle="round")
+        canvas.create_polygon(
+            cx - s * 0.5, cy - s * 0.15, cx + s * 0.5, cy - s * 0.15,
+            cx, cy - s * 0.75, fill=color, outline="")
+        canvas.create_line(cx - s * 0.95, cy + s * 0.95, cx + s * 0.95, cy + s * 0.95,
+                           fill=color, width=2, capstyle="round")
+
+
+def icon_badge(parent, palette, icon_key: str, size: int = 30) -> tk.Canvas:
+    """A small rounded-square badge with one of _draw_nav_icon's glyphs
+    centered in it - the card-header icon treatment from the reference
+    UI (a muted icon in a soft rounded square, sitting to the left of
+    a card's title), built from the exact same icon vocabulary the nav
+    rail already uses rather than a second icon system."""
+    cvs = tk.Canvas(parent, width=size, height=size,
+                    highlightthickness=0, bd=0, bg=parent.cget("bg"))
+    round_rect(cvs, 1, 1, size - 1, size - 1, size * 0.28,
+              fill=palette["SURFACE_ALT"], outline="")
+    _draw_nav_icon(cvs, icon_key, size / 2, size / 2, size * 0.24,
+                   palette["FG_DIM"])
+    return cvs
+
+
+def status_pill(parent, palette, text: str, kind: str = "neutral") -> tk.Canvas:
+    """A small rounded status chip - text on a softly-tinted background,
+    matching the reference UI's compact status indicators ("Supported",
+    "1 WARNING") rather than this app's usual full-sentence status
+    labels. kind picks the color pairing:
+        "good"    - POSITIVE/ACCENT_SOFT  (connected, supported, active)
+        "warning" - WARNING/WARNING_SOFT  (needs attention, but not broken)
+        "bad"     - NEGATIVE (text) on a dim SURFACE_ALT fill (blocked, unavailable)
+        "neutral" - FG_DIM on SURFACE_ALT (inactive, informational)
+    Sized to its own text (not a fixed width), since chip length varies
+    a lot ("On" vs "Not Installed").
+    """
+    fg_by_kind = {
+        "good": palette["POSITIVE"], "warning": palette["WARNING"],
+        "bad": palette["NEGATIVE"], "neutral": palette["FG_DIM"],
+    }
+    bg_by_kind = {
+        "good": palette["ACCENT_SOFT"], "warning": palette["WARNING_SOFT"],
+        "bad": palette["SURFACE_ALT"], "neutral": palette["SURFACE_ALT"],
+    }
+    fg = fg_by_kind.get(kind, palette["FG_DIM"])
+    bg = bg_by_kind.get(kind, palette["SURFACE_ALT"])
+
+    probe = tk.Label(parent, text=text, font=("Segoe UI", 8, "bold"))
+    probe.update_idletasks()
+    text_w = probe.winfo_reqwidth()
+    text_h = probe.winfo_reqheight()
+    probe.destroy()
+
+    pad_x, pad_y = 9, 5
+    w, h = text_w + pad_x * 2, text_h + pad_y * 2
+    cvs = tk.Canvas(parent, width=w, height=h, highlightthickness=0, bd=0,
+                    bg=parent.cget("bg"))
+    round_rect(cvs, 0, 0, w, h, h / 2, fill=bg, outline="")
+    cvs.create_text(w / 2, h / 2, text=text, fill=fg,
+                    font=("Segoe UI", 8, "bold"))
+    return cvs
 
 
 class NavItem(tk.Canvas):

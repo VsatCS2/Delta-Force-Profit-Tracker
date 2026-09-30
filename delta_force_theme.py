@@ -23,6 +23,7 @@ THEMES = {
         "FG": "#e6ecf7", "FG_DIM": "#94a6c2", "FG_MUTED": "#5c6e8d",
         "ACCENT": "#5fd089", "ACCENT_HI": "#7ee4a4", "ACCENT_SOFT": "#1c3d2d",
         "POSITIVE": "#5fd089", "NEGATIVE": "#f27488",
+        "WARNING": "#e8b34a", "WARNING_SOFT": "#3a2f18",
         "SELECT_BG": "#1e3a5c", "SELECT_FG": "#eef5ff",
     },
     "Steel": {
@@ -33,6 +34,7 @@ THEMES = {
         "FG": "#e8ecf1", "FG_DIM": "#94a0b5", "FG_MUTED": "#5e687a",
         "ACCENT": "#f0a868", "ACCENT_HI": "#ffbe82", "ACCENT_SOFT": "#3a2a1a",
         "POSITIVE": "#7ed09a", "NEGATIVE": "#ef7a8c",
+        "WARNING": "#e8c34a", "WARNING_SOFT": "#3a3318",
         "SELECT_BG": "#3a2f1c", "SELECT_FG": "#fff3e3",
     },
     "Void": {
@@ -43,6 +45,7 @@ THEMES = {
         "FG": "#ece6f7", "FG_DIM": "#a598c4", "FG_MUTED": "#6b6088",
         "ACCENT": "#b58cff", "ACCENT_HI": "#c9a8ff", "ACCENT_SOFT": "#2d1f4a",
         "POSITIVE": "#7ed9b0", "NEGATIVE": "#ff7fa5",
+        "WARNING": "#e8b34a", "WARNING_SOFT": "#3a2f1e",
         "SELECT_BG": "#3a2860", "SELECT_FG": "#f7f1ff",
     },
     "Day": {
@@ -53,6 +56,7 @@ THEMES = {
         "FG": "#0f1a2e", "FG_DIM": "#55647e", "FG_MUTED": "#93a0b5",
         "ACCENT": "#2d6fd6", "ACCENT_HI": "#4a86e6", "ACCENT_SOFT": "#dce8fa",
         "POSITIVE": "#17996b", "NEGATIVE": "#d63355",
+        "WARNING": "#a8720a", "WARNING_SOFT": "#faf0da",
         "SELECT_BG": "#dce8fa", "SELECT_FG": "#0d2649",
     },
 }

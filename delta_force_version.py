@@ -17,7 +17,7 @@ version is older than the current one - keep each line short, plain,
 and user-facing (not a commit log).
 """
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 
 def version_tuple(v: str):
@@ -33,6 +33,15 @@ def version_tuple(v: str):
 
 
 CHANGELOG = {
+    "1.4.0": [
+        "New: click any player on the Community leaderboard to view their recent match history (up to their last 200 matches), color-coded win/loss like your own Matches tab",
+        "New: set your own custom keyboard shortcut for the overlay instead of picking from presets",
+        "New: hover tooltips on Best Map, Best Operator, and your best/worst squad-mate stats explaining exactly what each number means",
+        "Fixed: the app incorrectly asking you to log in again on every launch, even with a valid saved login",
+        "Fixed: the best/worst squad-mate stats were labeled \"matches together\" for both — now correctly shows wins together vs losses together, matching the in-game wording",
+        "Fixed: small white artifacts in the corners of dropdown menus",
+        "Visual refresh: toggle switches, section icons, and colored status indicators throughout Settings and Community, plus more consistent spacing on the Overview page",
+    ],
     "1.3.0": [
         "New: the app can now download and install updates for you — no more manually re-downloading from GitHub",
         "Fixed: the Discord Rich Presence icon showing a profit (green) arrow on a loss day when you hadn't played yet",

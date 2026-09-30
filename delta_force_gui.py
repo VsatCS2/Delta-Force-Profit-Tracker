@@ -45,7 +45,7 @@ from delta_force_theme import (
 )
 from delta_force_widgets import (
     _Debouncer, make_sortable, round_rect, GradientFrame, Card, NavItem,
-    bind_mousewheel_to_canvas,
+    ToggleSwitch, InfoIcon, icon_badge, status_pill, bind_mousewheel_to_canvas,
 )
 
 try:
@@ -228,6 +228,18 @@ class TrackerApp:
         self.root.option_add("*TCombobox*Listbox.selectBackground", c["SELECT_BG"])
         self.root.option_add("*TCombobox*Listbox.selectForeground", c["SELECT_FG"])
         self.root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 10))
+        # The dropdown's popup list is a plain tk.Listbox under the hood -
+        # ttk styling never touches it, only the option_add calls above
+        # do. Its OWN defaults (a sunken relief plus a 1-2px focus-ring
+        # border in a light system color on many Windows installs) were
+        # never overridden, which is exactly what shows up as small
+        # bright corner artifacts against a dark theme - the relief
+        # bevel and the unstyled highlight ring meeting at each corner.
+        self.root.option_add("*TCombobox*Listbox.relief", "flat")
+        self.root.option_add("*TCombobox*Listbox.highlightThickness", 0)
+        self.root.option_add("*TCombobox*Listbox.highlightBackground", c["BORDER_SOFT"])
+        self.root.option_add("*TCombobox*Listbox.highlightColor", c["BORDER_SOFT"])
+        self.root.option_add("*TCombobox*Listbox.borderWidth", 0)
 
         style = ttk.Style()
         try:
@@ -555,6 +567,21 @@ class TrackerApp:
             fill="x", pady=(0, 18))
 
         self.rail_rows = {}
+        # Only these two need a tooltip - "best" here means highest
+        # TOTAL net income across every match on that map/with that
+        # operator, not average per match or win rate, and that specific
+        # meaning isn't inferable from the label alone (confirmed by
+        # checking core.best_map_and_operator's actual ranking logic
+        # rather than assuming). The other rail stats are self-
+        # explanatory as labeled, so they don't get one.
+        rail_explanations = {
+            "best_map": "Ranked by total net income across every match "
+                        "played on that map - not the average per match, "
+                        "and not win rate.",
+            "best_op": "Ranked by total net income across every match "
+                      "played with that operator - not the average per "
+                      "match, and not win rate.",
+        }
         for key, label in [
             ("matches",  "MATCHES"),
             ("wl",       "WINS / LOSSES"),
@@ -565,8 +592,13 @@ class TrackerApp:
         ]:
             row = tk.Frame(inner, bg=c["SURFACE"])
             row.pack(fill="x", pady=7)
-            tk.Label(row, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
-                     font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
+            header = tk.Frame(row, bg=c["SURFACE"])
+            header.pack(fill="x")
+            tk.Label(header, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 9, "bold"), anchor="w").pack(side="left")
+            if key in rail_explanations:
+                self._info_icon(header, rail_explanations[key]).pack(
+                    side="left", padx=(5, 0))
             val = tk.Label(row, text="—", bg=c["SURFACE"], fg=c["FG"],
                            font=("Segoe UI Semibold", 13), anchor="w",
                            justify="left", wraplength=RAIL_INNER_W)
@@ -612,16 +644,42 @@ class TrackerApp:
         self.rpc_var = tk.BooleanVar(value=settings.get("discord_rpc", False))
 
         self.debug_var = tk.BooleanVar(value=core.is_debug())
-        debug_chk = tk.Checkbutton(
-            actions, text="Show debug log",
-            variable=self.debug_var, command=self._toggle_debug_panel,
-            background=c["SURFACE"], foreground=c["FG_MUTED"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"],
-            highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 9), anchor="w",
-        )
-        debug_chk.pack(fill="x", pady=(6, 4))
+        self._toggle_row(actions, "Show debug log", self.debug_var,
+                         self._toggle_debug_panel, font_size=9,
+                         fg=c["FG_MUTED"], pack_opts={"fill": "x", "pady": (6, 4)})
+
+    def _toggle_row(self, parent, text, variable, command, *,
+                    font_size=10, fg=None, wraplength=None,
+                    pack_opts=None):
+        """A ToggleSwitch + Label pair, replacing the old
+        tk.Checkbutton(text=..., variable=..., command=...) pattern used
+        throughout Settings/Community - same reading order (switch
+        first, then text) and the same variable/command wiring, just the
+        pill-style switch instead of a native checkbox glyph. Returns
+        (row_frame, switch) - callers that need to disable/enable the
+        switch later (see the auto-download toggle in Settings) use
+        switch.set_state("disabled"/"normal"), not switch.configure().
+        """
+        c = self.colors
+        row = tk.Frame(parent, bg=c["SURFACE"])
+        switch = ToggleSwitch(row, c, variable, command=command)
+        switch.pack(side="left", padx=(0, 10))
+        label = tk.Label(row, text=text, bg=c["SURFACE"], fg=fg or c["FG"],
+                         font=("Segoe UI", font_size), anchor="w",
+                         justify="left")
+        if wraplength:
+            label.configure(wraplength=wraplength)
+        label.pack(side="left", fill="x" if wraplength else "none")
+        row.pack(**(pack_opts or {"anchor": "w"}))
+        return row, switch
+
+    def _info_icon(self, parent, explanation: str):
+        """The handful of researched, genuinely-non-obvious explanations
+        this app attaches an InfoIcon to - not sprinkled everywhere,
+        only where a label alone doesn't tell you what the number really
+        means. Kept in one place so the wording stays consistent if a
+        stat is explained in more than one spot."""
+        return InfoIcon(parent, self.colors, explanation)
 
     def _pill_button(self, parent, text, command, primary=False):
         c = self.colors
@@ -929,7 +987,11 @@ class TrackerApp:
             fill="x", pady=(24, 10), padx=(0, 6))
 
         session_card = Card(inner, c, padding=(22, 18), radius=14)
-        session_card.pack(fill="x", pady=(0, 6), padx=(0, 6))
+        # Matches HVI/Weekly Highlights' own (0, 24) below - these three
+        # cards previously disagreed with each other (6px here vs 24px
+        # there), giving Overview an uneven rhythm where one gap was
+        # nearly half the others on the same page.
+        session_card.pack(fill="x", pady=(0, 24), padx=(0, 6))
 
         # Two mutually-exclusive panels, same pattern as Community's
         # linked/not-linked - toggled by _refresh_session_card() rather
@@ -1073,9 +1135,16 @@ class TrackerApp:
 
         best_col = tk.Frame(friends_row, bg=c["SURFACE"])
         best_col.pack(side="left", fill="x", expand=True)
-        tk.Label(best_col, text="BEST SQUAD-MATE THIS WEEK", bg=c["SURFACE"],
+        best_head = tk.Frame(best_col, bg=c["SURFACE"])
+        best_head.pack(fill="x")
+        tk.Label(best_head, text="BEST SQUAD-MATE THIS WEEK", bg=c["SURFACE"],
                  fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
-                 anchor="w").pack(fill="x")
+                 anchor="w").pack(side="left")
+        self._info_icon(best_head,
+            "Your own extracted value, not a combined total with them - "
+            "specifically from the matches you WON together this week "
+            "(the count above is wins with them, not every match played "
+            "together).").pack(side="left", padx=(5, 0))
         self.wh_best_friend_label = tk.Label(
             best_col, text="—", bg=c["SURFACE"], fg=c["FG"],
             font=("Segoe UI Semibold", 12), anchor="w")
@@ -1087,9 +1156,16 @@ class TrackerApp:
 
         worst_col = tk.Frame(friends_row, bg=c["SURFACE"])
         worst_col.pack(side="left", fill="x", expand=True)
-        tk.Label(worst_col, text="WORST SQUAD-MATE THIS WEEK", bg=c["SURFACE"],
+        worst_head = tk.Frame(worst_col, bg=c["SURFACE"])
+        worst_head.pack(fill="x")
+        tk.Label(worst_head, text="WORST SQUAD-MATE THIS WEEK", bg=c["SURFACE"],
                  fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
-                 anchor="w").pack(fill="x")
+                 anchor="w").pack(side="left")
+        self._info_icon(worst_head,
+            "Your own lost value, not a combined total with them - "
+            "specifically from the matches you LOST together this week "
+            "(the count above is losses with them, not every match "
+            "played together).").pack(side="left", padx=(5, 0))
         self.wh_worst_friend_label = tk.Label(
             worst_col, text="—", bg=c["SURFACE"], fg=c["FG"],
             font=("Segoe UI Semibold", 12), anchor="w")
@@ -1174,20 +1250,25 @@ class TrackerApp:
         kd = wh.get("kd_rate")
         self.wh_kd_label.configure(text=f"{kd:.2f}" if kd is not None else "—")
 
-        def _set_friend(label, sub_label, friend):
+        def _set_friend(label, sub_label, friend, outcome_word):
             if friend:
                 label.configure(text=friend["name"], fg=c["FG"])
                 sub_label.configure(
-                    text=f"{friend['matches']} matches together · "
+                    text=f"{friend['matches']} {outcome_word} together · "
                          f"{core.fmt_money(friend['value'])}")
             else:
                 label.configure(text="No data this week", fg=c["FG_MUTED"])
                 sub_label.configure(text="")
 
+        # "wins"/"losses", not a generic "matches" count that could mix
+        # both - confirmed against the real game UI's own framing
+        # ("Victory: 35 matches" for a Best Friend, "Narrow Defeat: 20
+        # matches" for a Best Frenemy), which the API's match_num field
+        # for each one lines up with exactly.
         _set_friend(self.wh_best_friend_label, self.wh_best_friend_sub_label,
-                   wh.get("best_friend"))
+                   wh.get("best_friend"), "wins")
         _set_friend(self.wh_worst_friend_label, self.wh_worst_friend_sub_label,
-                   wh.get("worst_friend"))
+                   wh.get("worst_friend"), "losses")
 
         self._render_weekly_trend_chart()
         self._render_item_strip(self.wh_top_items_row, wh.get("top_items") or [])
@@ -1716,38 +1797,36 @@ class TrackerApp:
         self.community_link_btn.pack(anchor="w")
 
         self._community_linked = tk.Frame(status_card.body, bg=c["SURFACE"])
+        name_row = tk.Frame(self._community_linked, bg=c["SURFACE"])
+        name_row.pack(fill="x")
         self.community_name_label = tk.Label(
-            self._community_linked, text="—", bg=c["SURFACE"], fg=c["FG"],
+            name_row, text="—", bg=c["SURFACE"], fg=c["FG"],
             font=("Segoe UI Semibold", 13), anchor="w")
-        self.community_name_label.pack(fill="x")
+        self.community_name_label.pack(side="left")
+        # Static, not dynamically updated: this pill only ever renders
+        # while _community_linked itself is showing, which only happens
+        # when the person IS linked - "Linked" is the only value it
+        # could show here, so it doesn't need rebuilding on state change
+        # the way community_name_label's text does.
+        status_pill(name_row, c, "Linked", "good").pack(
+            side="left", padx=(8, 0))
 
         opt_row = tk.Frame(self._community_linked, bg=c["SURFACE"])
         opt_row.pack(fill="x", pady=(10, 0))
         self.community_optin_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            opt_row, text="Show my stats and recent matches on the public leaderboard",
-            variable=self.community_optin_var,
-            command=self._on_community_optin_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"], highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(side="left")
+        self._toggle_row(opt_row, "Show my stats and recent matches on the "
+                         "public leaderboard", self.community_optin_var,
+                         self._on_community_optin_toggle,
+                         pack_opts={"side": "left"})
 
         auto_row = tk.Frame(self._community_linked, bg=c["SURFACE"])
         auto_row.pack(fill="x", pady=(4, 0))
         self.community_autosync_var = tk.BooleanVar(
             value=self.settings.get("community_auto_sync", True))
-        tk.Checkbutton(
-            auto_row, text="Keep my stats up to date automatically "
-                           "(after each match refresh)",
-            variable=self.community_autosync_var,
-            command=self._on_community_autosync_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"], highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(side="left")
+        self._toggle_row(auto_row, "Keep my stats up to date automatically "
+                         "(after each match refresh)", self.community_autosync_var,
+                         self._on_community_autosync_toggle,
+                         pack_opts={"side": "left"})
 
         btn_row = tk.Frame(self._community_linked, bg=c["SURFACE"])
         btn_row.pack(fill="x", pady=(14, 0))
@@ -1822,6 +1901,14 @@ class TrackerApp:
                       initial_col="net", initial_reverse=True)
         self.community_tree.pack(fill="both", expand=True, side="left")
         self.community_tree.bind("<Double-1>", self._on_community_row_double_click)
+        # Every other clickable thing in the app sets this (buttons, rail
+        # rows) - the leaderboard didn't, from before double-click did
+        # anything here. Hovering over a specific ROW rather than the
+        # whole tree, so it doesn't fire over empty space below the rows.
+        self.community_tree.bind(
+            "<Motion>",
+            lambda e: self.community_tree.configure(
+                cursor="hand2" if self.community_tree.identify_row(e.y) else "arrow"))
 
         board_scroll = ttk.Scrollbar(board_card.body, orient="vertical",
                                      command=self.community_tree.yview)
@@ -1974,7 +2061,7 @@ class TrackerApp:
         tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
 
-        for m in matches:
+        for i, m in enumerate(matches):
             date_str = m.get("match_time", "")
             try:
                 date_str = (datetime.fromisoformat(date_str)
@@ -1982,11 +2069,21 @@ class TrackerApp:
             except (ValueError, TypeError):
                 pass  # keep the raw string rather than show nothing
             net = m.get("net_income", 0)
+            stripe = "even" if i % 2 == 0 else "odd"
             tree.insert("", "end", values=(
                 date_str, m.get("map_name") or "—", m.get("operator_name") or "—",
                 (m.get("result") or "?").upper(),
                 f"{'+' if net >= 0 else ''}{net:,}",
-            ))
+            ), tags=(stripe, "pos" if net >= 0 else "neg"))
+
+        # Same tag names/colors as the Matches tab, for the same reason
+        # that tab uses them: a quick color scan matters more here than
+        # column alignment, since this is someone glancing through
+        # another player's history, not studying their own.
+        tree.tag_configure("even", background=c["SURFACE"])
+        tree.tag_configure("odd", background=c["SURFACE_ALT"])
+        tree.tag_configure("pos", foreground=c["POSITIVE"])
+        tree.tag_configure("neg", foreground=c["NEGATIVE"])
 
     def _render_community_leaderboard(self):
         if not hasattr(self, "community_tree"):
@@ -2090,11 +2187,20 @@ class TrackerApp:
 
         bind_mousewheel_to_canvas(canvas)
 
-        def section_title(text, hint=""):
-            tk.Label(self.settings_inner, text=text.upper(),
+        def section_title(text, hint="", icon_key=None, pill=None):
+            head = tk.Frame(self.settings_inner, bg=c["BG_TOP"])
+            head.pack(fill="x", pady=(18, 6))
+            if icon_key:
+                badge = icon_badge(head, c, icon_key, size=28)
+                badge.pack(side="left", padx=(0, 10))
+            tk.Label(head, text=text.upper(),
                      bg=c["BG_TOP"], fg=c["FG_MUTED"],
                      font=("Segoe UI", 9, "bold"),
-                     anchor="w").pack(fill="x", pady=(18, 6))
+                     anchor="w").pack(side="left")
+            if pill:
+                pill_text, pill_kind = pill
+                status_pill(head, c, pill_text, pill_kind).pack(
+                    side="left", padx=(8, 0))
             if hint:
                 tk.Label(self.settings_inner, text=hint,
                          bg=c["BG_TOP"], fg=c["FG_MUTED"],
@@ -2104,7 +2210,8 @@ class TrackerApp:
         # ---- Auto-refresh ----
         section_title("Auto-Refresh",
                       "Automatically fetch new matches on an interval so the "
-                      "Discord presence and match history stay current.")
+                      "Discord presence and match history stay current.",
+                      icon_key="auto_refresh")
 
         auto_card = Card(self.settings_inner, c, padding=(22, 18), radius=12)
         auto_card.pack(fill="x", pady=(0, 6))
@@ -2113,16 +2220,8 @@ class TrackerApp:
         row.pack(fill="x", pady=4)
         self.auto_refresh_var = tk.BooleanVar(
             value=self.settings.get("auto_refresh_enabled", True))
-        tk.Checkbutton(
-            row, text="Enable automatic refresh",
-            variable=self.auto_refresh_var,
-            command=self._on_auto_refresh_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"],
-            highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(side="left")
+        self._toggle_row(row, "Enable automatic refresh", self.auto_refresh_var,
+                         self._on_auto_refresh_toggle, pack_opts={"side": "left"})
 
         row2 = tk.Frame(auto_card.body, bg=c["SURFACE"])
         row2.pack(fill="x", pady=(10, 4))
@@ -2159,43 +2258,27 @@ class TrackerApp:
 
         # ---- Notifications ----
         section_title("Notifications",
-                      "Get a small popup when auto-refresh finds new matches.")
+                      "Get a small popup when auto-refresh finds new matches.",
+                      icon_key="notifications")
 
         notif_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
         notif_card.pack(fill="x", pady=(0, 6))
         self.notify_var = tk.BooleanVar(
             value=self.settings.get("auto_refresh_notify", False))
-        tk.Checkbutton(
-            notif_card.body,
-            text="Show a toast when new matches are fetched",
-            variable=self.notify_var,
-            command=self._on_notify_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"],
-            highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(anchor="w")
+        self._toggle_row(notif_card.body, "Show a toast when new matches are fetched",
+                         self.notify_var, self._on_notify_toggle)
 
         # ---- Discord ----
         section_title("Discord Rich Presence",
-                      "Show your today's profit / W-L on your Discord profile.")
+                      "Show your today's profit / W-L on your Discord profile.",
+                      icon_key="discord")
 
         discord_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
         discord_card.pack(fill="x", pady=(0, 6))
         self.settings_rpc_var = tk.BooleanVar(
             value=self.settings.get("discord_rpc", False))
-        tk.Checkbutton(
-            discord_card.body,
-            text="Enable Discord Rich Presence",
-            variable=self.settings_rpc_var,
-            command=self._on_settings_rpc_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"],
-            highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(anchor="w")
+        self._toggle_row(discord_card.body, "Enable Discord Rich Presence",
+                         self.settings_rpc_var, self._on_settings_rpc_toggle)
         tk.Label(discord_card.body,
                  text="Requires pypresence and DISCORD_CLIENT_ID in "
                       "delta_force_rpc.py. The toggle in the right rail stays "
@@ -2209,24 +2292,16 @@ class TrackerApp:
                       "A quick-glance HUD (today's profit/loss, best "
                       "raid, top loot) toggled by a keyboard shortcut "
                       "that works even while the game has focus — so "
-                      "you don't have to alt-tab to check. Windows only.")
+                      "you don't have to alt-tab to check.",
+                      icon_key="overlay", pill=("Windows Only", "neutral"))
 
         overlay_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
         overlay_card.pack(fill="x", pady=(0, 6))
 
         self.settings_overlay_var = tk.BooleanVar(
             value=self.settings.get("overlay_enabled", False))
-        tk.Checkbutton(
-            overlay_card.body,
-            text="Enable overlay hotkey",
-            variable=self.settings_overlay_var,
-            command=self._on_overlay_enabled_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"],
-            highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(anchor="w")
+        self._toggle_row(overlay_card.body, "Enable overlay hotkey",
+                         self.settings_overlay_var, self._on_overlay_enabled_toggle)
 
         hotkey_row = tk.Frame(overlay_card.body, bg=c["SURFACE"])
         hotkey_row.pack(fill="x", pady=(10, 0))
@@ -2268,17 +2343,9 @@ class TrackerApp:
 
         self.settings_tray_var = tk.BooleanVar(
             value=self.settings.get("minimize_to_tray", False))
-        tk.Checkbutton(
-            overlay_card.body,
-            text="Minimize to system tray instead of the taskbar",
-            variable=self.settings_tray_var,
-            command=self._on_minimize_to_tray_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"],
-            highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(anchor="w")
+        self._toggle_row(overlay_card.body,
+                         "Minimize to system tray instead of the taskbar",
+                         self.settings_tray_var, self._on_minimize_to_tray_toggle)
         if not overlay_mod.TrayIcon.available():
             tk.Label(overlay_card.body,
                      text="pystray isn't installed in this build, so this "
@@ -2288,39 +2355,26 @@ class TrackerApp:
 
         # ---- Startup ----
         section_title("Startup",
-                      "Launch automatically when Windows starts. Windows only.")
+                      "Launch automatically when Windows starts.",
+                      icon_key="startup", pill=("Windows Only", "neutral"))
 
         startup_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
         startup_card.pack(fill="x", pady=(0, 6))
 
         self.settings_boot_var = tk.BooleanVar(
             value=self.settings.get("start_on_boot", False))
-        tk.Checkbutton(
-            startup_card.body,
-            text="Start automatically when Windows starts",
-            variable=self.settings_boot_var,
-            command=self._on_start_on_boot_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"],
-            highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(anchor="w")
+        self._toggle_row(startup_card.body,
+                         "Start automatically when Windows starts",
+                         self.settings_boot_var, self._on_start_on_boot_toggle)
 
         self.settings_boot_minimized_var = tk.BooleanVar(
             value=self.settings.get("start_minimized", False))
-        tk.Checkbutton(
-            startup_card.body,
-            text="Start minimized (to tray if enabled above, otherwise "
-                 "just minimized)",
-            variable=self.settings_boot_minimized_var,
-            command=self._on_start_minimized_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"],
-            highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w",
-        ).pack(anchor="w", pady=(6, 0))
+        self._toggle_row(startup_card.body,
+                         "Start minimized (to tray if enabled above, "
+                         "otherwise just minimized)",
+                         self.settings_boot_minimized_var,
+                         self._on_start_minimized_toggle,
+                         pack_opts={"anchor": "w", "pady": (6, 0)})
 
         self.startup_status_label = tk.Label(
             startup_card.body, text="", bg=c["SURFACE"], fg=c["FG_MUTED"],
@@ -2329,7 +2383,7 @@ class TrackerApp:
         self._update_startup_status_label()
 
         # ---- Updates ----
-        section_title("Updates", f"You're running version {APP_VERSION}.")
+        section_title("Updates", f"You're running version {APP_VERSION}.", icon_key="updates")
 
         update_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
         update_card.pack(fill="x", pady=(0, 6))
@@ -2341,18 +2395,14 @@ class TrackerApp:
 
         self.autodownload_var = tk.BooleanVar(
             value=self.settings.get("auto_download_updates", True))
-        autodownload_check = tk.Checkbutton(
+        _, autodownload_switch = self._toggle_row(
             update_card.body,
-            text="Automatically download updates in the background "
-                 "(never installs without asking)",
-            variable=self.autodownload_var, command=self._on_autodownload_toggle,
-            background=c["SURFACE"], foreground=c["FG"],
-            activebackground=c["SURFACE"], activeforeground=c["FG"],
-            selectcolor=c["SURFACE_ALT"], highlightthickness=0, borderwidth=0,
-            font=("Segoe UI", 10), anchor="w")
-        autodownload_check.pack(anchor="w", pady=(0, 10))
+            "Automatically download updates in the background "
+            "(never installs without asking)",
+            self.autodownload_var, self._on_autodownload_toggle,
+            pack_opts={"anchor": "w", "pady": (0, 10)})
         if not can_self_install:
-            autodownload_check.configure(state="disabled")
+            autodownload_switch.set_state("disabled")
 
         update_buttons = tk.Frame(update_card.body, bg=c["SURFACE"])
         update_buttons.pack(anchor="w")
@@ -2380,7 +2430,7 @@ class TrackerApp:
                 text="This build isn't set up to check for updates.")
 
         # ---- About & Legal ----
-        section_title("About & Legal", "DF Tracker is an unofficial, fan-made tool.")
+        section_title("About & Legal", "DF Tracker is an unofficial, fan-made tool.", icon_key="about_legal")
 
         about_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
         about_card.pack(fill="x", pady=(0, 6))
@@ -2414,7 +2464,8 @@ class TrackerApp:
                       "Pull your live profile card, or backfill the full "
                       "squad/kill breakdown for older matches that don't "
                       "have it yet. Backfilling is slow and rate-limited "
-                      "since it fetches one match at a time.")
+                      "since it fetches one match at a time.",
+                      icon_key="profile")
 
         detail_card = Card(self.settings_inner, c, padding=(22, 18), radius=12)
         detail_card.pack(fill="x", pady=(0, 6))
@@ -2451,7 +2502,8 @@ class TrackerApp:
         section_title("Data & Export",
                       "Export the match history as CSVs, force a full "
                       "re-pull ignoring the cache, or open the folder "
-                      "where the cache lives.")
+                      "where the cache lives.",
+                      icon_key="data_export")
 
         data_card = Card(self.settings_inner, c, padding=(22, 18), radius=12)
         data_card.pack(fill="x", pady=(0, 6))
