@@ -118,6 +118,7 @@ class TrackerApp:
 
         self._detail_fetching = set()
         self._detail_windows = {}
+        self._player_profile_windows = {}
         self._backfill_stop = False
         self._backfill_active = False
 
@@ -129,6 +130,7 @@ class TrackerApp:
         self._community_meta = {}          # period/day/resets_at from the server
         self._last_auto_sync = datetime.min
         self._staged_update = None          # (version, staged_path) once downloaded+verified
+        self._match_history_notice_checked = False
         self._update_download_busy = False
         self.community_sort_key = "net"
         self.community_sort_reverse = True
@@ -709,18 +711,13 @@ class TrackerApp:
     # First-run login prompt
     # ------------------------------------------------------------------
     def _maybe_prompt_login(self):
-        # have_credentials() only looks at the in-memory credential
-        # blocks, which start empty on every launch - they're populated
-        # by refresh_credentials_from_browser() reading dftools_creds.json
-        # off disk. The startup gate fires this prompt before any of the
-        # fetches (which are what normally trigger that refresh) have
-        # run, so without loading first this fired on every single launch
-        # for someone who was already logged in. current_openid() already
-        # uses this same load-before-check pattern; mirror it here.
-        try:
-            core.refresh_credentials_from_browser()
-        except Exception:
-            pass
+        # Loads the saved capture from disk first - without this, the
+        # in-memory credential blocks are still empty this early in
+        # startup (the calls that actually populate them, e.g.
+        # start_profile_fetch, are scheduled a little later), so this
+        # was checking nothing and prompting to log in on every single
+        # launch regardless of what was actually saved.
+        core.refresh_credentials_from_browser()
         if core.have_credentials("matchlist"):
             return
 
@@ -1728,7 +1725,7 @@ class TrackerApp:
         opt_row.pack(fill="x", pady=(10, 0))
         self.community_optin_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            opt_row, text="Show my stats on the public leaderboard",
+            opt_row, text="Show my stats and recent matches on the public leaderboard",
             variable=self.community_optin_var,
             command=self._on_community_optin_toggle,
             background=c["SURFACE"], foreground=c["FG"],
@@ -1824,6 +1821,7 @@ class TrackerApp:
         make_sortable(self.community_tree, columns, self._on_community_sort,
                       initial_col="net", initial_reverse=True)
         self.community_tree.pack(fill="both", expand=True, side="left")
+        self.community_tree.bind("<Double-1>", self._on_community_row_double_click)
 
         board_scroll = ttk.Scrollbar(board_card.body, orient="vertical",
                                      command=self.community_tree.yview)
@@ -1872,6 +1870,124 @@ class TrackerApp:
         self.community_sort_reverse = reverse
         self._render_community_leaderboard()
 
+    # ------------------------------------------------------------------
+    # Player profile viewer (double-click a leaderboard row)
+    # ------------------------------------------------------------------
+    def _on_community_row_double_click(self, event):
+        iid = self.community_tree.identify_row(event.y)
+        if not iid or not iid.startswith("pid"):
+            return  # a row with no player_id (shouldn't happen for a real server reply)
+        try:
+            player_id = int(iid[3:])
+        except ValueError:
+            return
+        self._open_player_profile(player_id)
+
+    def _open_player_profile(self, player_id: int):
+        """A read-only window showing another opted-in player's synced
+        match history. Deliberately simpler than _open_match_detail's
+        rich per-match view (squad list, kill breakdown, etc.) - we only
+        ever have the narrow set of fields the server accepts for
+        someone else's matches (see server/app.py's MatchRow), not the
+        full raw match data we have for our own."""
+        if player_id in self._player_profile_windows:
+            try:
+                self._player_profile_windows[player_id].lift()
+                return
+            except tk.TclError:
+                pass
+
+        c = self.colors
+        win = tk.Toplevel(self.root)
+        win.title("Player Profile")
+        win.configure(bg=c["BG_TOP"])
+        win.geometry("760x620")
+        win.minsize(560, 400)
+        self._player_profile_windows[player_id] = win
+        win.protocol("WM_DELETE_WINDOW", lambda: (
+            self._player_profile_windows.pop(player_id, None), win.destroy()))
+
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - 760) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - 620) // 2)
+        win.geometry(f"760x620+{x}+{y}")
+
+        loading = tk.Label(win, text="Loading match history...", bg=c["BG_TOP"],
+                           fg=c["FG_MUTED"], font=("Segoe UI", 11))
+        loading.pack(pady=48)
+
+        def worker():
+            name, matches = comm.fetch_player_matches(player_id)
+            self.msg_queue.put(("player_matches_done", (player_id, name, matches)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _populate_player_profile(self, win, player_id: int, name, matches: list):
+        c = self.colors
+        for w in win.winfo_children():
+            w.destroy()
+
+        if name is None:
+            win.title("Player Profile")
+            tk.Label(win, text="Couldn't load this player.", bg=c["BG_TOP"],
+                     fg=c["NEGATIVE"], font=("Segoe UI", 11)).pack(pady=48)
+            tk.Label(win, text="They may have left the leaderboard, or the "
+                               "server couldn't be reached.",
+                     bg=c["BG_TOP"], fg=c["FG_MUTED"], font=("Segoe UI", 9)
+                     ).pack()
+            return
+
+        win.title(f"{name} — Player Profile")
+
+        header = tk.Frame(win, bg=c["BG_TOP"], padx=20, pady=16)
+        header.pack(fill="x")
+        tk.Label(header, text=name, bg=c["BG_TOP"], fg=c["FG"],
+                 font=("Segoe UI Semibold", 16), anchor="w").pack(fill="x")
+
+        net_total = sum(m.get("net_income", 0) for m in matches)
+        wins = sum(1 for m in matches if m.get("result") == "win")
+        losses = sum(1 for m in matches if m.get("result") == "loss")
+        summary = (f"{len(matches)} matches shown (most recent, up to 200) — "
+                  f"net {core.fmt_money(net_total)} — {wins}W-{losses}L")
+        tk.Label(header, text=summary, bg=c["BG_TOP"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(4, 0))
+
+        if not matches:
+            tk.Label(win, text="No synced matches yet.", bg=c["BG_TOP"],
+                     fg=c["FG_MUTED"], font=("Segoe UI", 10)).pack(pady=32)
+            return
+
+        body = tk.Frame(win, bg=c["BG_TOP"], padx=20, pady=16)
+        body.pack(fill="both", expand=True)
+
+        columns = [("date", "Date"), ("map", "Map"), ("operator", "Operator"),
+                  ("result", "Result"), ("net", "Net Income")]
+        widths = {"date": 150, "map": 180, "operator": 130, "result": 80, "net": 140}
+        anchors = {"date": "w", "map": "w", "operator": "w",
+                  "result": "center", "net": "e"}
+
+        tree = ttk.Treeview(body, columns=tuple(cid for cid, _ in columns),
+                            show="headings")
+        for cid, label in columns:
+            tree.heading(cid, text=label, anchor=anchors[cid])
+            tree.column(cid, width=widths[cid], anchor=anchors[cid], stretch=True)
+        tree.pack(fill="both", expand=True, side="left")
+        scroll = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+
+        for m in matches:
+            date_str = m.get("match_time", "")
+            try:
+                date_str = (datetime.fromisoformat(date_str)
+                           .strftime("%b %d, %I:%M %p").replace(" 0", " "))
+            except (ValueError, TypeError):
+                pass  # keep the raw string rather than show nothing
+            net = m.get("net_income", 0)
+            tree.insert("", "end", values=(
+                date_str, m.get("map_name") or "—", m.get("operator_name") or "—",
+                (m.get("result") or "?").upper(),
+                f"{'+' if net >= 0 else ''}{net:,}",
+            ))
+
     def _render_community_leaderboard(self):
         if not hasattr(self, "community_tree"):
             return
@@ -1917,7 +2033,13 @@ class TrackerApp:
                       reverse=self.community_sort_reverse)
 
         for i, p in enumerate(rows, start=1):
-            tree.insert("", "end", values=(
+            pid = p.get("player_id")
+            # "pidN" rather than the bare id: Treeview iids are also
+            # matched against tag/selector strings elsewhere, and keeping
+            # this namespaced avoids ever colliding with some other
+            # feature's own iid scheme on the same tree in the future.
+            iid = f"pid{pid}" if pid is not None else f"row{i}"
+            tree.insert("", "end", iid=iid, values=(
                 i,
                 p.get("display_name") or "—",
                 f"{int(row_net(p)):,}",  # bare number: "credits" on every row just clipped
@@ -2120,6 +2242,20 @@ class TrackerApp:
         hotkey_combo.pack(side="left")
         hotkey_combo.bind("<<ComboboxSelected>>",
                           lambda e: self._on_overlay_hotkey_change())
+
+        custom_row = tk.Frame(overlay_card.body, bg=c["SURFACE"])
+        custom_row.pack(fill="x", pady=(8, 0))
+        self._pill_button(
+            custom_row, "Record Custom Shortcut",
+            self._show_hotkey_capture_dialog).pack(side="left", padx=(0, 12))
+        _, _, _active_label = overlay_mod.resolve_hotkey(self.settings)
+        custom_text = (f"Current: {_active_label}"
+                       if self.settings.get("overlay_hotkey_source") == "custom"
+                       else "Using the preset above")
+        self.custom_hotkey_label = tk.Label(
+            custom_row, text=custom_text, bg=c["SURFACE"], fg=c["FG_MUTED"],
+            font=("Segoe UI", 9))
+        self.custom_hotkey_label.pack(side="left")
 
         self.overlay_status_label = tk.Label(
             overlay_card.body, text="", bg=c["SURFACE"], fg=c["FG_MUTED"],
@@ -2411,7 +2547,7 @@ class TrackerApp:
                 text="This build isn't running on Windows, so the global "
                      "shortcut can't be registered here.", fg=c["NEGATIVE"])
         elif self.hotkey_listener.is_registered():
-            label = self.settings.get("overlay_hotkey", overlay_mod.DEFAULT_HOTKEY_LABEL)
+            _, _, label = overlay_mod.resolve_hotkey(self.settings)
             self.overlay_status_label.configure(
                 text=f"Active — press {label} anywhere to show or hide it.",
                 fg=c["POSITIVE"])
@@ -2432,11 +2568,143 @@ class TrackerApp:
 
     def _on_overlay_hotkey_change(self):
         label = self.overlay_hotkey_var.get()
-        _save_settings({"overlay_hotkey": label})
+        _save_settings({"overlay_hotkey": label, "overlay_hotkey_source": "preset"})
         self.settings["overlay_hotkey"] = label
+        self.settings["overlay_hotkey_source"] = "preset"
+        if hasattr(self, "custom_hotkey_label"):
+            self.custom_hotkey_label.configure(text="Using the preset above")
         if self.settings.get("overlay_enabled"):
             self._start_hotkey_listener()  # .start() already stops any previous one
         self._update_overlay_status_label()
+
+    def _show_hotkey_capture_dialog(self):
+        """Records a hotkey the person presses themselves, rather than
+        picking from HOTKEY_PRESETS. On Windows, Tk's event.keycode maps
+        directly onto the Win32 virtual-key code RegisterHotKey wants -
+        no translation table needed (this is specific to Tk's Windows
+        port; the general hotkey feature is already Windows-only, so
+        that's the only platform this needs to be true on).
+
+        Modifier state is tracked by hand via press/release on the
+        modifier keys themselves (Control_L/R, Shift_L/R, Alt_L/R, and
+        the Windows key), rather than trusting event.state's modifier
+        bits - holding Alt specifically can route through a different
+        Windows message (WM_SYSKEYDOWN) that doesn't reliably surface in
+        a plain <KeyPress> binding's state, so trusting the bitmask alone
+        risks silently dropping Alt from a captured combination.
+        """
+        try:
+            c = self.colors
+            win = tk.Toplevel(self.root)
+            win.title("Set Overlay Shortcut")
+            win.configure(bg=c["BG_TOP"])
+            win.resizable(False, False)
+            win.transient(self.root)
+            win.geometry("380x1")
+
+            body = tk.Frame(win, bg=c["BG_TOP"], padx=28, pady=24)
+            body.pack(fill="both", expand=True)
+            tk.Label(body, text="Press your shortcut now", bg=c["BG_TOP"],
+                     fg=c["FG"], font=("Segoe UI Semibold", 14),
+                     anchor="w").pack(fill="x", pady=(0, 8))
+            tk.Label(body, text="Hold at least one of Ctrl, Alt, or Shift, "
+                                "then press another key. Esc cancels.",
+                     bg=c["BG_TOP"], fg=c["FG_DIM"], font=("Segoe UI", 10),
+                     anchor="w", justify="left", wraplength=324).pack(
+                fill="x", pady=(0, 16))
+            preview = tk.Label(body, text="...", bg=c["SURFACE"], fg=c["FG"],
+                               font=("Segoe UI Semibold", 13), anchor="center")
+            preview.pack(fill="x", ipady=10)
+            error_label = tk.Label(body, text="", bg=c["BG_TOP"], fg=c["NEGATIVE"],
+                                   font=("Segoe UI", 9), anchor="w")
+            error_label.pack(fill="x", pady=(8, 0))
+
+            held = set()
+            mod_keysyms = {"Control_L": "Ctrl", "Control_R": "Ctrl",
+                          "Shift_L": "Shift", "Shift_R": "Shift",
+                          "Alt_L": "Alt", "Alt_R": "Alt"}
+
+            def held_text():
+                order = [m for m in ("Ctrl", "Alt", "Shift") if m in held]
+                return "+".join(order) if order else "..."
+
+            def format_key_name(keysym):
+                names = {"F1": "F1", "F2": "F2", "F3": "F3", "F4": "F4", "F5": "F5",
+                        "F6": "F6", "F7": "F7", "F8": "F8", "F9": "F9", "F10": "F10",
+                        "F11": "F11", "F12": "F12", "space": "Space",
+                        "Tab": "Tab", "Return": "Enter", "BackSpace": "Backspace",
+                        "Delete": "Delete", "Insert": "Insert", "Home": "Home",
+                        "End": "End", "Prior": "Page Up", "Next": "Page Down",
+                        "Up": "Up", "Down": "Down", "Left": "Left", "Right": "Right"}
+                if keysym in names:
+                    return names[keysym]
+                if len(keysym) == 1:
+                    return keysym.upper()
+                return keysym
+
+            def on_key_release(event):
+                mod = mod_keysyms.get(event.keysym)
+                if mod:
+                    held.discard(mod)
+                    preview.configure(text=held_text())
+
+            def on_key_press(event):
+                if event.keysym == "Escape":
+                    win.destroy()
+                    return "break"
+                mod = mod_keysyms.get(event.keysym)
+                if mod:
+                    held.add(mod)
+                    preview.configure(text=held_text())
+                    return "break"
+                if not held:
+                    error_label.configure(
+                        text="Hold Ctrl, Alt, or Shift too - a bare key isn't "
+                             "safe to use as a global shortcut.")
+                    return "break"
+                if event.keycode == 0:
+                    error_label.configure(text="Didn't recognize that key - try another.")
+                    return "break"
+
+                mods = 0
+                if "Ctrl" in held:
+                    mods |= overlay_mod.MOD_CONTROL
+                if "Alt" in held:
+                    mods |= overlay_mod.MOD_ALT
+                if "Shift" in held:
+                    mods |= overlay_mod.MOD_SHIFT
+                label = held_text() + "+" + format_key_name(event.keysym)
+
+                self.settings["overlay_hotkey_mods"] = mods
+                self.settings["overlay_hotkey_vk"] = event.keycode
+                self.settings["overlay_hotkey_custom_label"] = label
+                self.settings["overlay_hotkey_source"] = "custom"
+                _save_settings({
+                    "overlay_hotkey_mods": mods,
+                    "overlay_hotkey_vk": event.keycode,
+                    "overlay_hotkey_custom_label": label,
+                    "overlay_hotkey_source": "custom",
+                })
+                if self.settings.get("overlay_enabled"):
+                    self._start_hotkey_listener()
+                self._update_overlay_status_label()
+                if hasattr(self, "custom_hotkey_label"):
+                    self.custom_hotkey_label.configure(text=f"Current: {label}")
+                win.destroy()
+                return "break"
+
+            win.bind("<KeyPress>", on_key_press)
+            win.bind("<KeyRelease>", on_key_release)
+
+            win.update_idletasks()
+            w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+            win.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+            win.grab_set()
+            win.focus_force()
+        except Exception:
+            pass
 
     def _on_minimize_to_tray_toggle(self):
         enabled = self.settings_tray_var.get()
@@ -4391,6 +4659,8 @@ class TrackerApp:
     def _community_sync_worker(self):
         try:
             comm.sync_stats(self.rows, self.profile_data)
+            if self.settings.get("community_match_history_ack"):
+                comm.sync_matches(self.rows)
             self.msg_queue.put(("community_sync_done", None))
         except comm.LinkExpiredError as e:
             self.msg_queue.put(("community_link_expired", str(e)))
@@ -4509,6 +4779,83 @@ class TrackerApp:
         return f"{hours}h {rem // 60}m" if hours else f"{max(1, rem // 60)}m"
 
     # ---- automatic stat updates while opted in ----
+    def _maybe_show_match_history_notice(self, status: dict):
+        """One-shot, on the first time this session that we learn the
+        person is already opted in and hasn't seen this notice yet -
+        match history sharing is new, and someone who opted in under the
+        OLD, narrower wording shouldn't start sharing more just because
+        they updated the app. A fresh opt-in from here on already covers
+        this via the updated checkbox label (see _on_community_optin_toggle's
+        "community_optin_done" handling), so this is purely for people
+        who were already opted in before that wording existed.
+        """
+        if self._match_history_notice_checked:
+            return
+        self._match_history_notice_checked = True
+        if self.settings.get("community_match_history_ack"):
+            return
+        if not (status and status.get("opted_in")):
+            return
+        self._show_match_history_notice_dialog()
+
+    def _show_match_history_notice_dialog(self):
+        try:
+            c = self.colors
+            win = tk.Toplevel(self.root)
+            win.title("Leaderboard Update")
+            win.configure(bg=c["BG_TOP"])
+            win.resizable(False, False)
+            win.transient(self.root)
+            win.geometry("440x1")
+
+            body = tk.Frame(win, bg=c["BG_TOP"], padx=28, pady=24)
+            body.pack(fill="both", expand=True)
+            tk.Label(body, text="The leaderboard now includes match history",
+                     bg=c["BG_TOP"], fg=c["FG"], font=("Segoe UI Semibold", 14),
+                     anchor="w", wraplength=384, justify="left").pack(
+                fill="x", pady=(0, 12))
+            tk.Label(body,
+                     text="You're currently sharing your stats on the "
+                          "public leaderboard. That now also includes your "
+                          "recent matches (up to your last 200), visible to "
+                          "anyone who clicks your name there - not just the "
+                          "summary numbers as before.\n\n"
+                          "Keep sharing under the new terms, or stop?",
+                     bg=c["BG_TOP"], fg=c["FG_DIM"], font=("Segoe UI", 10),
+                     anchor="w", justify="left", wraplength=384).pack(
+                fill="x", pady=(0, 20))
+
+            buttons = tk.Frame(body, bg=c["BG_TOP"])
+            buttons.pack(anchor="e")
+
+            def stop_sharing():
+                win.destroy()
+                self.settings["community_match_history_ack"] = True
+                _save_settings({"community_match_history_ack": True})
+                threading.Thread(target=self._community_optin_worker,
+                                 args=(False,), daemon=True).start()
+                if hasattr(self, "community_optin_var"):
+                    self.community_optin_var.set(False)
+
+            def keep_sharing():
+                win.destroy()
+                self.settings["community_match_history_ack"] = True
+                _save_settings({"community_match_history_ack": True})
+
+            self._pill_button(buttons, "Stop Sharing", stop_sharing).pack(
+                side="left", padx=(0, 8))
+            self._pill_button(buttons, "Keep Sharing", keep_sharing,
+                              primary=True).pack(side="left")
+
+            win.update_idletasks()
+            w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+            win.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+            win.grab_set()
+        except Exception:
+            pass
+
     def _community_startup_check(self):
         """Learn the opted-in state at launch (a small authenticated
         request) so auto-sync can work without the Community tab having
@@ -4539,6 +4886,8 @@ class TrackerApp:
     def _auto_sync_worker(self):
         try:
             comm.sync_stats(self.rows, self.profile_data)
+            if self.settings.get("community_match_history_ack"):
+                comm.sync_matches(self.rows)
             self.msg_queue.put(("community_auto_sync_done", None))
         except comm.LinkExpiredError:
             self.msg_queue.put(("community_auto_sync_expired", None))
@@ -4810,6 +5159,7 @@ class TrackerApp:
                     players, status, meta, period = payload
                     # status is about the account, not the board - always keep it
                     self._community_status = status
+                    self._maybe_show_match_history_notice(status)
                     if period == self.community_period:
                         self._community_leaderboard = players
                         self._community_meta = meta
@@ -4821,6 +5171,15 @@ class TrackerApp:
                     # opening the board sent nothing, so the daily board
                     # stayed empty.) Same gates + 2-minute throttle apply.
                     self._maybe_auto_sync()
+                elif kind == "player_matches_done":
+                    player_id, name, matches = payload
+                    win = self._player_profile_windows.get(player_id)
+                    if win is not None:
+                        try:
+                            if win.winfo_exists():
+                                self._populate_player_profile(win, player_id, name, matches)
+                        except tk.TclError:
+                            pass
                 elif kind == "community_auto_sync_done":
                     if self.active_section == "community":
                         self.start_community_leaderboard_fetch()
@@ -4875,6 +5234,10 @@ class TrackerApp:
                     self._update_download_busy = False
                     self.set_status(f"Update download failed: {payload}")
                 elif kind == "community_optin_done":
+                    opted_in_now = payload
+                    if opted_in_now:
+                        self.settings["community_match_history_ack"] = True
+                        _save_settings({"community_match_history_ack": True})
                     self.set_status("Leaderboard visibility updated.")
                     self.start_community_leaderboard_fetch()
                 elif kind == "community_optin_error":
@@ -4971,8 +5334,7 @@ class TrackerApp:
             pass
 
     def _start_hotkey_listener(self):
-        mods, vk = overlay_mod.hotkey_by_label(
-            self.settings.get("overlay_hotkey", overlay_mod.DEFAULT_HOTKEY_LABEL))
+        mods, vk, _label = overlay_mod.resolve_hotkey(self.settings)
         self.hotkey_listener.start(mods, vk)
 
     def _stop_hotkey_listener(self):

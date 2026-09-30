@@ -101,10 +101,14 @@ DEFAULT_SETTINGS = {
     "auto_refresh_notify": False,
     "community_prompted": False,
     "overlay_enabled": False,
-    # Any label parse_hotkey() accepts works here, not just the presets -
-    # a custom shortcut captured in Settings is stored in this same key.
-    # Default mirrors delta_force_overlay.DEFAULT_HOTKEY_LABEL.
-    "overlay_hotkey": "Ctrl+Shift+D",
+    "overlay_hotkey": "Ctrl+Shift+D",  # matches delta_force_overlay.DEFAULT_HOTKEY_LABEL
+    # "preset" (use overlay_hotkey above) or "custom" (use the three
+    # fields below, set by recording a combination in Settings). See
+    # delta_force_overlay.resolve_hotkey for how these combine.
+    "overlay_hotkey_source": "preset",
+    "overlay_hotkey_mods": None,
+    "overlay_hotkey_vk": None,
+    "overlay_hotkey_custom_label": None,
     "minimize_to_tray": False,
     # start_on_boot mirrors delta_force_startup's registry Run-key state
     # (that module reads the registry directly as the source of truth -
@@ -129,6 +133,11 @@ DEFAULT_SETTINGS = {
     # the install is instant - never installs/replaces anything without
     # an explicit click, regardless of this setting.
     "auto_download_updates": True,
+    # Whether the person has seen and acknowledged that leaderboard
+    # sharing includes match history (not just aggregate stats). A fresh
+    # opt-in already covers this via the checkbox's own wording; this
+    # flag exists for people who opted in before that wording did.
+    "community_match_history_ack": False,
     # True once the person has clicked through the first-run disclaimer.
     # Existing installs upgrading into this start False, so they see it once.
     "disclaimer_accepted": False,

@@ -43,37 +43,18 @@ IS_WINDOWS = sys.platform.startswith("win")
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
-MOD_WIN = 0x0008
 WM_HOTKEY = 0x0312
 _HOTKEY_ID = 0xBEEF  # arbitrary, only needs to be unique within this process
 
-# Virtual-key codes for the keys we allow as the "main" key of a custom
-# shortcut. Deliberately letters + digits + a few function keys, not the
-# full VK table: RegisterHotKey with MOD_NOREPEAT and no keyboard hook
-# means anything we can't name cleanly in the UI would be a combo the
-# person can't later recognize in Settings anyway. This is a hobby
-# tool's overlay toggle, not a general-purpose macro system.
 _VK = {
-    **{chr(c): c for c in range(0x41, 0x5B)},          # A-Z
-    **{str(d): 0x30 + d for d in range(10)},           # 0-9
-    "F1": 0x70, "F2": 0x71, "F3": 0x72, "F4": 0x73,
-    "F5": 0x74, "F6": 0x75, "F7": 0x76, "F8": 0x77,
     "F9": 0x78, "F10": 0x79, "F11": 0x7A, "F12": 0x7B,
-    "Insert": 0x2D, "Delete": 0x2E, "Home": 0x24, "End": 0x23,
-    "PageUp": 0x21, "PageDown": 0x22,
-    "`": 0xC0, "-": 0xBD, "=": 0xBB,
-    "[": 0xDB, "]": 0xDD, "\\": 0xDC,
-    ";": 0xBA, "'": 0xDE, ",": 0xBC, ".": 0xBE, "/": 0xBF,
+    "D": 0x44, "O": 0x4F, "L": 0x4C,
 }
-_VK_REVERSE = {v: k for k, v in _VK.items()}
 
-# RegisterHotKey modifier flags we accept from a capture. MOD_NOREPEAT
-# is added at registration time, not part of what the user chose.
-_MOD_MASK = MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN
-
-# What the Settings dropdown offers as one-click choices. "Custom…" is
-# special-cased in the GUI to open the capture dialog instead of being
-# parsed as a shortcut itself.
+# Preset choices offered in Settings, rather than free-form key capture -
+# far less code, and sidesteps having to handle every possible key/locale
+# edge case for a feature that just needs a handful of safe, memorable
+# defaults. (label, modifiers, vk_name) - vk_name indexes into _VK above.
 HOTKEY_PRESETS = [
     ("Ctrl+Shift+D", MOD_CONTROL | MOD_SHIFT, "D"),
     ("Ctrl+Shift+O", MOD_CONTROL | MOD_SHIFT, "O"),
@@ -81,100 +62,52 @@ HOTKEY_PRESETS = [
     ("Ctrl+Shift+F9", MOD_CONTROL | MOD_SHIFT, "F9"),
     ("Ctrl+Shift+F10", MOD_CONTROL | MOD_SHIFT, "F10"),
 ]
-CUSTOM_HOTKEY_LABEL = "Custom…"
 DEFAULT_HOTKEY_LABEL = "Ctrl+Shift+D"
 
 
-def format_hotkey(modifiers: int, vk_code: int) -> str:
-    """(MOD_CONTROL | MOD_SHIFT, 0x44) -> 'Ctrl+Shift+D'.
-
-    Order is fixed (Ctrl, Alt, Shift, Win) to match how Windows itself
-    writes shortcuts, and so the same combination always produces the
-    same label - important because the label IS the persisted value;
-    an unstable format would make an unchanged shortcut look changed
-    on every save.
-    """
-    parts = []
-    if modifiers & MOD_CONTROL:
-        parts.append("Ctrl")
-    if modifiers & MOD_ALT:
-        parts.append("Alt")
-    if modifiers & MOD_SHIFT:
-        parts.append("Shift")
-    if modifiers & MOD_WIN:
-        parts.append("Win")
-    name = _VK_REVERSE.get(vk_code)
-    if name is None:
-        return ""
-    # Letters/digits last, so 'Ctrl+Shift+D' reads the way people say it.
-    parts.append(name.upper() if len(name) == 1 and name.isalpha() else name)
-    return "+".join(parts)
-
-
-def parse_hotkey(label: str):
-    """'Ctrl+Shift+D' -> (MOD_CONTROL | MOD_SHIFT, 0x44), or None if it
-    can't be parsed. Case-insensitive on the modifier names; the key
-    name is matched case-insensitively against _VK.
-
-    Returns None rather than raising so callers can treat a malformed
-    stored value the same as a missing one and fall back to the default
-    - a bad settings.json shouldn't be able to make the overlay
-    unlaunchable."""
-    if not label or not isinstance(label, str):
-        return None
-    parts = [p.strip() for p in label.split("+") if p.strip()]
-    if len(parts) < 2:
-        return None
-
-    mods = 0
-    key_name = None
-    for part in parts:
-        low = part.lower()
-        if low in ("ctrl", "control"):
-            mods |= MOD_CONTROL
-        elif low == "alt":
-            mods |= MOD_ALT
-        elif low == "shift":
-            mods |= MOD_SHIFT
-        elif low in ("win", "super", "meta"):
-            mods |= MOD_WIN
-        else:
-            if key_name is not None:
-                return None  # two non-modifier keys - not a valid combo
-            key_name = part
-    if key_name is None or mods == 0:
-        return None
-
-    # Look the key up case-insensitively: 'd' and 'D' are the same key,
-    # 'f9' and 'F9' are the same key, but the dict is keyed by the
-    # canonical form.
-    vk = None
-    for candidate, code in _VK.items():
-        if candidate.lower() == key_name.lower():
-            vk = code
-            break
-    if vk is None:
-        return None
-    return mods, vk
-
-
 def hotkey_by_label(label: str):
-    """Returns (modifiers, vk_code) for a hotkey label.
-
-    Tries the presets, then the general parser, then falls back to the
-    default - so a stored custom shortcut parses correctly, and a
-    corrupt or outdated one degrades to the default instead of leaving
-    the overlay unregisterable."""
+    """Returns (modifiers, vk_code) for a HOTKEY_PRESETS label, falling
+    back to the default if the label is unrecognized (e.g. an old
+    settings file referencing a preset that no longer exists)."""
     for lbl, mods, vk_name in HOTKEY_PRESETS:
         if lbl == label:
             return mods, _VK[vk_name]
-    parsed = parse_hotkey(label)
-    if parsed is not None:
-        return parsed
     for lbl, mods, vk_name in HOTKEY_PRESETS:
         if lbl == DEFAULT_HOTKEY_LABEL:
             return mods, _VK[vk_name]
     return MOD_CONTROL | MOD_SHIFT, _VK["D"]
+
+
+def resolve_hotkey(settings: dict):
+    """Returns (modifiers, vk_code, display_label) for whatever's
+    currently configured - a preset picked from the dropdown, or a
+    custom combination someone recorded themselves (see
+    delta_force_gui._show_hotkey_capture_dialog). settings["overlay_hotkey_source"]
+    ("preset" or "custom") decides which one is actually in effect,
+    since a person can have both a preset selection AND a previously
+    recorded custom combo sitting in settings at once, and only one can
+    be the real answer.
+
+    Falls back to the default preset if the requested source's data is
+    missing or malformed (e.g. a settings file from before custom
+    hotkeys existed, or a corrupted value) - the overlay should always
+    end up with SOME working hotkey rather than none.
+    """
+    source = settings.get("overlay_hotkey_source", "preset")
+    if source == "custom":
+        mods = settings.get("overlay_hotkey_mods")
+        vk = settings.get("overlay_hotkey_vk")
+        label = settings.get("overlay_hotkey_custom_label")
+        if isinstance(mods, int) and isinstance(vk, int) and mods and vk and label:
+            return mods, vk, label
+        # fall through to the preset default below - malformed custom data
+
+    label = settings.get("overlay_hotkey", DEFAULT_HOTKEY_LABEL)
+    mods, vk = hotkey_by_label(label)
+    for lbl, _, _ in HOTKEY_PRESETS:
+        if lbl == label:
+            return mods, vk, label
+    return mods, vk, DEFAULT_HOTKEY_LABEL
 
 
 # ---------------------------------------------------------------------
@@ -235,13 +168,7 @@ class HotkeyListener:
             self.last_error = f"Couldn't access Windows hotkey APIs: {e}"
             return
 
-        # MOD_NOREPEAT: without it, holding the combination down makes
-        # Windows deliver WM_HOTKEY on the OS's key-repeat cadence, so a
-        # held shortcut would toggle the overlay rapidly. Silently
-        # ignored on pre-Win7, which is fine.
-        MOD_NOREPEAT = 0x4000
-        if not user32.RegisterHotKey(
-                None, _HOTKEY_ID, modifiers | MOD_NOREPEAT, vk_code):
+        if not user32.RegisterHotKey(None, _HOTKEY_ID, modifiers, vk_code):
             self.last_error = (
                 "Couldn't register that hotkey — another application "
                 "may already be using it. Pick a different one.")

@@ -143,6 +143,16 @@ def _parse_reset_hour() -> int:
 # Set it as an environment variable (DAILY_RESET_HOUR_UTC) on the host.
 DAILY_RESET_HOUR_UTC = _parse_reset_hour()
 
+# Per-player match history cap. A sync always sends the player's most
+# recent MAX_MATCHES_STORED matches as a full replace (delete-then-insert
+# for that user) rather than an incremental diff - simpler, self-healing
+# if a previous sync partially failed, and at this cap the payload is
+# only a few tens of KB, so there's no real bandwidth reason to bother
+# with incremental sync. This also bounds the table's size per player
+# regardless of how long they've been playing: opted-in players never
+# accumulate more than this many stored rows each.
+MAX_MATCHES_STORED = 200
+
 
 def _current_day() -> str:
     """The daily leaderboard's day label: the UTC date on which the current
@@ -215,6 +225,22 @@ def init_db():
                 updated_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS matches (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                room_id TEXT NOT NULL,
+                match_time TEXT NOT NULL,
+                net_income INTEGER NOT NULL DEFAULT 0,
+                result TEXT NOT NULL DEFAULT '?',
+                map_name TEXT NOT NULL DEFAULT '',
+                operator_name TEXT NOT NULL DEFAULT '',
+                kill_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, room_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_matches_user_time "
+            "ON matches (user_id, match_time DESC)")
         # Daily-leaderboard columns, added to existing databases in place
         # (the Railway volume means there IS an existing database to keep).
         # Checked column by column rather than "if the table is old", so it
@@ -354,7 +380,58 @@ class StatsPayload(BaseModel):
                      "daily_best_map", "daily_best_operator", mode="before")
     @classmethod
     def _clean_text(cls, v):
-        return "".join(ch for ch in (v or "").strip() if ch.isprintable())[:64]
+        return clean_text(v)
+
+
+def clean_text(v, max_length: int = 64) -> str:
+    """Strip to printable characters only and cap length - shared by
+    every free-text field across payloads (map/operator/rank names) so
+    nothing user-supplied reaches the leaderboard or a match history view
+    with control characters or unbounded length in it."""
+    return "".join(ch for ch in (v or "").strip() if ch.isprintable())[:max_length]
+
+
+class MatchRow(BaseModel):
+    """One match, as synced for the (capped, replace-on-sync) match
+    history view. Deliberately narrow - just enough to render a match
+    list, nothing that isn't already effectively public once someone is
+    on the leaderboard at all (this is gated by the SAME opt-in, not a
+    separate one - see the room_id note below for the one field that
+    needed extra thought)."""
+    # room_id is the match's own ID from the game's own API - not a
+    # secret, and needed as the natural per-match key so a sync can
+    # cleanly replace a player's stored set without duplicating rows.
+    room_id: str = Field(..., min_length=1, max_length=64)
+    match_time: str = Field(..., max_length=32)
+    net_income: int = Field(0, ge=-100_000_000, le=100_000_000)
+    result: str = Field("?", max_length=8)
+    map_name: str = Field("", max_length=64)
+    operator_name: str = Field("", max_length=64)
+    kill_count: int = Field(0, ge=0, le=1000)
+
+    @field_validator("room_id", "match_time", mode="before")
+    @classmethod
+    def _clean_id_fields(cls, v):
+        return clean_text(v, max_length=64)
+
+    @field_validator("map_name", "operator_name", mode="before")
+    @classmethod
+    def _clean_names(cls, v):
+        return clean_text(v)
+
+    @field_validator("result", mode="before")
+    @classmethod
+    def _clean_result(cls, v):
+        v = (v or "?").strip().lower()
+        return v if v in ("win", "loss", "?") else "?"
+
+
+class MatchSyncPayload(BaseModel):
+    # max_length here rejects an oversized request outright (a 201st
+    # match in the list is a validation error, not silently truncated) -
+    # the client is expected to already cap to MAX_MATCHES_STORED before
+    # sending, this is the server refusing to trust that blindly.
+    matches: list[MatchRow] = Field(default_factory=list, max_length=MAX_MATCHES_STORED)
 
 
 @app.get("/me")
@@ -418,6 +495,57 @@ def sync_stats(payload: StatsPayload, request: Request,
             "day": _current_day(), "reset_hour_utc": DAILY_RESET_HOUR_UTC}
 
 
+@app.post("/matches/sync")
+def sync_matches(payload: MatchSyncPayload, request: Request,
+                 authorization: str = Header(None)):
+    """Full replace, not incremental - see MAX_MATCHES_STORED's docstring
+    for why. Storing this needs the SAME opt-in as the leaderboard itself
+    (no separate toggle) - by the time this call is authenticated we
+    already know who the player is, but whether their history is ever
+    SERVED back to anyone else is gated at read time in player_matches()
+    below by the same opted_in flag the leaderboard uses, not here."""
+    u = require_user(authorization, bucket="sync")
+    with db() as conn:
+        conn.execute("DELETE FROM matches WHERE user_id = ?", (u["id"],))
+        if payload.matches:
+            conn.executemany(
+                """INSERT INTO matches (user_id, room_id, match_time,
+                                         net_income, result, map_name,
+                                         operator_name, kill_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [(u["id"], m.room_id, m.match_time, m.net_income, m.result,
+                  m.map_name, m.operator_name, m.kill_count)
+                 for m in payload.matches])
+    return {"ok": True, "matches_stored": len(payload.matches)}
+
+
+@app.get("/players/{player_id}/matches")
+def player_matches(player_id: int, request: Request, limit: int = 200):
+    """Another player's match history, for clicking through from the
+    leaderboard. Gated on opted_in the same way the leaderboard itself
+    is - not a separate check, since this is meant to be exactly the
+    same opt-in, not an additional one. A player who was never on the
+    leaderboard, or has since left it, gets the same 404 either way,
+    so this can't be used to confirm whether a given player_id exists
+    but merely isn't opted in versus never having existed at all."""
+    _enforce_rate_limit("read", _client_ip(request))
+    limit = max(1, min(limit, MAX_MATCHES_STORED))
+    with db() as conn:
+        user = conn.execute(
+            "SELECT id, display_name FROM users WHERE id = ? AND opted_in = 1",
+            (player_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, "Player not found or not on the leaderboard")
+        rows = conn.execute(
+            """SELECT room_id, match_time, net_income, result, map_name,
+                      operator_name, kill_count
+               FROM matches WHERE user_id = ?
+               ORDER BY match_time DESC LIMIT ?""",
+            (player_id, limit)).fetchall()
+    return {"display_name": user["display_name"],
+            "matches": [dict(r) for r in rows]}
+
+
 @app.post("/opt-in")
 def opt_in(request: Request, authorization: str = Header(None)):
     u = require_user(authorization, bucket="toggle")
@@ -477,7 +605,7 @@ def leaderboard(request: Request, sort: str = "net_income", limit: int = 50,
         with db() as conn:
             rows = conn.execute(
                 f"""
-                SELECT u.display_name, s.daily_net_income AS net_income,
+                SELECT u.id AS player_id, u.display_name, s.daily_net_income AS net_income,
                        s.daily_matches AS matches, s.daily_wins AS wins,
                        s.daily_losses AS losses,
                        ROUND({_DAILY_WIN_RATE}, 1) AS win_rate,
@@ -500,7 +628,7 @@ def leaderboard(request: Request, sort: str = "net_income", limit: int = 50,
     with db() as conn:
         rows = conn.execute(
             f"""
-            SELECT u.display_name, s.net_income_all_time,
+            SELECT u.id AS player_id, u.display_name, s.net_income_all_time,
                    s.matches, s.wins, s.losses, s.win_rate, s.best_map,
                    s.best_operator, s.rank_label, s.updated_at
             FROM users u

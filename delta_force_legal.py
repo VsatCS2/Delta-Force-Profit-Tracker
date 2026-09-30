@@ -30,11 +30,13 @@ DISCLAIMER_PARAGRAPHS = [
     "entirely at your own risk, including any risk to your account.",
 
     "The community leaderboard is optional and opt-in. If you join, your "
-    "display name, summary stats (all-time and today's), and an account "
-    "identifier (stored by the server only as a one-way hash) are sent to a "
-    "server run by this tool's author, and kept up to date automatically "
-    "while you're opted in. You can turn that off, or leave and delete "
-    "your data, any time.",
+    "display name, summary stats, your recent match history (up to your "
+    "last 200 matches, visible to anyone who clicks your name there), and "
+    "an account identifier (stored by the server only as a one-way hash) "
+    "are sent to a server run by this tool's author, and kept up to date "
+    "automatically while you're opted in - match history is part of the "
+    "same opt-in as the leaderboard, not a separate choice. You can turn "
+    "auto-updating off, or leave and delete your data, any time.",
 
     "Provided \"as is\", without warranty of any kind. Full terms are in "
     "Settings > About & Legal.",

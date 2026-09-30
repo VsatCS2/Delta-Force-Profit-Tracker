@@ -413,6 +413,56 @@ def check_for_update() -> dict:
     return detail if status == "update" else None
 
 
+def sync_matches(rows: list, timeout: int = _REQUEST_TIMEOUT_SECONDS) -> dict:
+    """Uploads this player's MAX_MATCHES_STORED (200) most recent matches
+    as a full replace - not incremental, matching the server's own
+    replace-on-sync design (see server/app.py's MAX_MATCHES_STORED
+    docstring for why: simpler, self-healing, and trivial bandwidth at
+    this cap). rows is core.build_rows() output, already newest-first.
+
+    Same error conventions as sync_stats(): raises NotLinkedError /
+    ServerNotConfiguredError / LinkExpiredError, or
+    requests.RequestException on a network/server error.
+    """
+    server_url = _require_server()
+    headers = _auth_headers()
+
+    matches = [{
+        "room_id": str(r.get("room_id", "")),
+        "match_time": r["datetime"].isoformat() if r.get("datetime") else "",
+        "net_income": int(r.get("net_income", 0)),
+        "result": r.get("result", "?"),
+        "map_name": r.get("map_name", "") or "",
+        "operator_name": r.get("operator_name", "") or "",
+        "kill_count": int(r.get("kill_count", 0) or 0),
+    } for r in (rows or [])[:200]]
+
+    resp = _request_authed("POST", f"{server_url}/matches/sync",
+                           json={"matches": matches}, headers=headers,
+                           timeout=timeout)
+    return resp.json()
+
+
+def fetch_player_matches(player_id: int, limit: int = 200):
+    """(display_name, matches) for another opted-in player, or (None, [])
+    if they're not found, aren't opted in, or the request fails for any
+    reason - this is read-only browsing of public leaderboard data, so
+    it fails soft like fetch_leaderboard() rather than raising."""
+    if not SERVER_URL:
+        return None, []
+    try:
+        resp = requests.get(f"{SERVER_URL}/players/{player_id}/matches",
+                            params={"limit": limit},
+                            timeout=_REQUEST_TIMEOUT_SECONDS)
+        if resp.status_code == 404:
+            return None, []
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("display_name"), data.get("matches", [])
+    except Exception:
+        return None, []
+
+
 def fetch_my_status() -> dict:
     """Returns {'display_name', 'opted_in', 'stats'} for the registered
     account, or None if not registered / server unreachable / the link
