@@ -32,6 +32,14 @@ exit. No new compiled binary, no separate updater .exe to maintain or
 get flagged by antivirus on its own - a batch script performing "wait,
 copy, relaunch" is about as unremarkable as file operations get.
 
+The wait itself is two-phase, not a single check (see
+build_install_script's docstring for the full reasoning): a quick PID
+check first, then the actual file copy is retried until it succeeds or
+a timeout passes, rather than trusting the PID check alone to mean the
+file lock is really gone. The script also logs each phase with a
+timestamp to %TEMP%, so a failed update leaves real evidence instead of
+silently doing nothing.
+
 Windows-only, like delta_force_overlay.py/delta_force_startup.py -
 importing this on another OS works fine, but every function here is
 inert unless IS_WINDOWS and the app is actually frozen (see
@@ -165,6 +173,26 @@ def build_install_script(staged_root: Path, install_dir: Path,
     process has exited, and returns its path. Doesn't run it - see
     launch_installer_and_exit.
 
+    Two-phase wait, not just a PID check: first, a quick (up to ~15s)
+    wait for the known PID to leave tasklist - fast in the common case.
+    Then, regardless of whether that loop found the PID gone or timed
+    out, the actual file copy is retried (up to ~20s) until it succeeds.
+    That second phase is what actually matters: a process disappearing
+    from tasklist doesn't guarantee Windows has released its file
+    handles that same instant (antivirus scanning a freshly-closed exe
+    is one realistic source of a few extra seconds of lock), and this
+    app is built as a PyInstaller --onefile exe, where I can't fully
+    verify from outside Windows whether the PID this script is told to
+    wait for is always exactly the one holding the lock. Retrying the
+    copy itself sidesteps needing that guarantee - it directly tests the
+    actual precondition (can we write these files yet?) instead of a
+    proxy for it.
+
+    Logs every step with a timestamp to %TEMP%\\dftracker_update_<pid>.log,
+    so a failed update leaves real evidence instead of nothing - if this
+    is ever still unreliable, that log is what would show which phase
+    actually failed, rather than guessing again.
+
     Every path is double-quoted throughout: both staged_root and
     install_dir can and often do contain spaces (a real reported install
     lived under "...\\DF Stats\\Public Release\\"), and an unquoted path
@@ -173,31 +201,53 @@ def build_install_script(staged_root: Path, install_dir: Path,
     loudly.
     """
     script_path = Path(tempfile.gettempdir()) / f"dftracker_update_{pid}.bat"
+    log_path = Path(tempfile.gettempdir()) / f"dftracker_update_{pid}.log"
     # /FI "PID eq N" is the documented tasklist filter for matching a
-    # specific process id; findc against the header-less CSV output
-    # (/NH) is the standard idiom for "is this PID still running".
+    # specific process id; find against the header-less CSV output (/NH)
+    # is the standard idiom for "is this PID still running".
     script = f'''@echo off
-setlocal
+setlocal enabledelayedexpansion
 set "SRC={staged_root}"
 set "DEST={install_dir}"
+set "LOG={log_path}"
 
+echo [%date% %time%] Update script started. PID={pid} > "%LOG%" 2>&1
+
+set /a waits=0
 :waitloop
 tasklist /FI "PID eq {pid}" /NH 2>NUL | find "{pid}" >NUL
 if "%ERRORLEVEL%"=="0" (
+    set /a waits+=1
+    if !waits! GEQ 15 goto copyloop
     timeout /t 1 /nobreak >NUL
     goto waitloop
 )
+echo [%date% %time%] Original process no longer listed after !waits!s. >> "%LOG%" 2>&1
 
-xcopy "%SRC%\\*" "%DEST%\\" /Y /E /I >NUL
-if errorlevel 1 (
-    echo Update failed to copy files. Your previous version is still in place.
-    pause
-    exit /b 1
-)
+set /a tries=0
+:copyloop
+set /a tries+=1
+xcopy "%SRC%\\*" "%DEST%\\" /Y /E /I >> "%LOG%" 2>&1
+if not errorlevel 1 goto copied
+echo [%date% %time%] Copy attempt !tries! failed - a file may still be in use. >> "%LOG%" 2>&1
+if !tries! GEQ 20 goto failed
+timeout /t 1 /nobreak >NUL
+goto copyloop
 
+:copied
+echo [%date% %time%] Copy succeeded after !tries! attempt(s). >> "%LOG%" 2>&1
 start "" "%DEST%\\{exe_name}"
+echo [%date% %time%] Relaunch command issued. >> "%LOG%" 2>&1
 rmdir /S /Q "%SRC%" 2>NUL
 del "%~f0"
+exit /b 0
+
+:failed
+echo [%date% %time%] Giving up after !tries! copy attempts. >> "%LOG%" 2>&1
+echo Update failed - a file may still be in use. Your previous version is untouched.
+echo Details: %LOG%
+pause
+exit /b 1
 '''
     script_path.write_text(script, encoding="utf-8")
     return script_path
