@@ -113,6 +113,21 @@ DEFAULT_SETTINGS = {
     "overlay_hotkey_mods": None,
     "overlay_hotkey_vk": None,
     "overlay_hotkey_custom_label": None,
+    # Player Lookup's own overlay (search teammates/opponents by name
+    # while in-game) - entirely independent of the stats overlay above:
+    # its own enabled flag, its own hotkey, its own default combination
+    # (Ctrl+Shift+O, not Ctrl+Shift+D) so the two never collide.
+    "search_overlay_enabled": False,
+    # Price Alerts: play a system sound when one triggers. On by default
+    # because the alert's toast can't appear over an exclusive-fullscreen
+    # game, so the sound is often the only thing that actually reaches
+    # someone mid-match.
+    "price_alert_sound": True,
+    "search_hotkey": "Ctrl+Shift+O",
+    "search_hotkey_source": "preset",
+    "search_hotkey_mods": None,
+    "search_hotkey_vk": None,
+    "search_hotkey_custom_label": None,
     "minimize_to_tray": False,
     # start_on_boot mirrors delta_force_startup's registry Run-key state
     # (that module reads the registry directly as the source of truth -

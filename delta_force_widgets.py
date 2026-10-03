@@ -429,6 +429,21 @@ def _draw_nav_icon(canvas: tk.Canvas, key: str, cx: float, cy: float,
                            cx_front + r_front, cy + r_front,
                            fill=color, outline="")
 
+    elif key == "lookup":
+        # Standard magnifying glass: a ring plus a short diagonal handle
+        # stroke, offset down-right from the ring - the universal search
+        # glyph, kept to the same two-primitive simplicity as the other
+        # nav icons rather than reaching for anything more detailed.
+        r = s * 0.6
+        ring_cx, ring_cy = cx - s * 0.15, cy - s * 0.15
+        canvas.create_oval(ring_cx - r, ring_cy - r, ring_cx + r, ring_cy + r,
+                           outline=color, width=2.2)
+        import math
+        ang = math.radians(45)
+        hx, hy = ring_cx + r * math.cos(ang), ring_cy + r * math.sin(ang)
+        canvas.create_line(hx, hy, hx + s * 0.55, hy + s * 0.55,
+                           fill=color, width=2.4, capstyle="round")
+
     # ---- Settings-card header badges (see delta_force_gui.py's
     # section_title) - same primitives/stroke-width conventions as the
     # nav icons above, just a wider vocabulary since there are more
@@ -466,13 +481,28 @@ def _draw_nav_icon(canvas: tk.Canvas, key: str, cx: float, cy: float,
             fill=color, outline="")
 
     elif key == "notifications":
-        # Bell: a rounded triangle-ish body plus a small base line and clapper dot.
-        canvas.create_arc(cx - s * 0.8, cy - s * 0.9, cx + s * 0.8, cy + s * 0.5,
-                          start=20, extent=140, style="chord",
-                          fill=color, outline="")
-        canvas.create_line(cx - s * 0.95, cy + s * 0.5, cx + s * 0.95, cy + s * 0.5,
-                           fill=color, width=2, capstyle="round")
-        canvas.create_oval(cx - s * 0.18, cy + s * 0.75, cx + s * 0.18, cy + s * 1.1,
+        # Bell: a dome that's taller than it is wide, flaring out at the
+        # lip, with a small nub on top and a clapper below. The first
+        # version (a flat arc, a line, and a dot) rendered as a beach
+        # umbrella once it became a main nav icon - the flat dome and
+        # wide line read as a parasol, not a bell.
+        body = [
+            cx - s * 1.00, cy + s * 0.62,
+            cx - s * 0.68, cy + s * 0.42,
+            cx - s * 0.60, cy - s * 0.12,
+            cx - s * 0.42, cy - s * 0.66,
+            cx,            cy - s * 0.84,
+            cx + s * 0.42, cy - s * 0.66,
+            cx + s * 0.60, cy - s * 0.12,
+            cx + s * 0.68, cy + s * 0.42,
+            cx + s * 1.00, cy + s * 0.62,
+            cx + s * 0.45, cy + s * 0.62,
+            cx - s * 0.45, cy + s * 0.62,
+        ]
+        canvas.create_polygon(body, smooth=True, fill=color, outline="")
+        canvas.create_oval(cx - s * 0.17, cy - s * 1.12, cx + s * 0.17, cy - s * 0.80,
+                           fill=color, outline="")
+        canvas.create_oval(cx - s * 0.30, cy + s * 0.78, cx + s * 0.30, cy + s * 1.18,
                            fill=color, outline="")
 
     elif key == "discord":

@@ -17,7 +17,7 @@ version is older than the current one - keep each line short, plain,
 and user-facing (not a commit log).
 """
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 
 def version_tuple(v: str):
@@ -33,6 +33,15 @@ def version_tuple(v: str):
 
 
 CHANGELOG = {
+    "1.5.0": [
+        "New: Price Alerts — pick an auction item and the price you'd buy it at, and get a pop-up and a sound when it drops that low (checked every minute, even while minimized)",
+        "New: Player Lookup — search any player by name for their combat stats and stash value",
+        "New: Search Overlay — look up a teammate or opponent mid-match with its own shortcut (Ctrl+Shift+O by default, changeable in Settings)",
+        "New: Extended Stats on your Profile tab — bullets fired, hit and missed, kills and deaths by tier, category scores, and a stash value breakdown",
+        "Improved: the Profile tab now uses the full window width, three cards per row, so there's less scrolling on wide screens",
+        "Improved: the auto-updater is more reliable at replacing the app and reopening it, and keeps a log if an install ever fails",
+        "Note: Player Lookup, the Search Overlay, Extended Stats and Price Alerts use deltaforceapi.com, an independent third-party service. Everything else still comes from the game's own web API",
+    ],
     "1.4.0": [
         "New: click any player on the Community leaderboard to view their recent match history (up to their last 200 matches), color-coded win/loss like your own Matches tab",
         "New: set your own custom keyboard shortcut for the overlay instead of picking from presets",

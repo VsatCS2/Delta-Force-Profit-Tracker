@@ -22,6 +22,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,8 @@ from tkinter import ttk, messagebox
 import delta_force_core as core
 import delta_force_community as comm
 import delta_force_overlay as overlay_mod
+import delta_force_thirdparty as thirdparty_mod
+import delta_force_alerts as alerts_mod
 import delta_force_startup as startup_mod
 import delta_force_updater as updater_mod
 import delta_force_legal as legal_mod
@@ -74,6 +77,8 @@ class TrackerApp:
         ("maps",      "Maps",      "maps"),
         ("matches",   "Matches",   "matches"),
         ("community", "Community", "community"),
+        ("lookup",    "Player Lookup", "lookup"),
+        ("alerts",    "Price Alerts", "notifications"),
         ("settings",  "Settings",  "settings"),
     ]
 
@@ -88,6 +93,31 @@ class TrackerApp:
         self.rows = []
         self.summaries = {}
         self.profile_data = None
+        # deltaforceapi.com data for the LINKED user specifically (not
+        # Player Lookup's arbitrary-search results) - warmed up once per
+        # session as soon as a nickname is known, since that service
+        # queues first-time analysis rather than answering instantly
+        # (confirmed directly: a player who's never been looked up
+        # before doesn't get stats back right away). Warming up early,
+        # well before anyone checks the Profile tab, is what makes this
+        # reliable for the app's own user even though the same lookup
+        # for an unfamiliar teammate/opponent genuinely can't be.
+        self._thirdparty_profile_data = None
+        self._thirdparty_warmup_started = False
+        self._thirdparty_warmup_responded = False
+        self._thirdparty_warmup_inflight = False
+        self._thirdparty_warmup_attempts = 0     # failed tries so far this backoff
+        self._thirdparty_retry_after = None      # pending root.after id, if any
+        # Price Alerts: the saved watchlist, plus transient UI/poll state.
+        # Loaded here (not in the section builder) because the poll loop
+        # runs whether or not that page has ever been opened.
+        self._price_alerts = alerts_mod.load_alerts()
+        self._alert_selected_item = None     # item dict picked from search results
+        self._alert_selected_price = None    # its price_info, once fetched
+        self._alert_search_results = {}      # tree iid -> item dict
+        self._alert_poll_running = False
+        self._alert_poll_after = None
+        self._alert_toasts = []              # live toast windows, for stacking
         self.match_busy = False
         self.profile_busy = False
         self.quick_busy = False
@@ -174,6 +204,10 @@ class TrackerApp:
         self.overlay = overlay_mod.OverlayWindow(self.root, self.colors)
         self.hotkey_listener = overlay_mod.HotkeyListener(
             on_trigger=lambda: self.root.after(0, self._toggle_overlay))
+        self.search_overlay = overlay_mod.SearchOverlayWindow(self.root, self.colors)
+        self.search_hotkey_listener = overlay_mod.HotkeyListener(
+            on_trigger=lambda: self.root.after(0, self._toggle_search_overlay),
+            hotkey_id=overlay_mod._SEARCH_HOTKEY_ID)
         self.tray_icon = overlay_mod.TrayIcon(
             self.root,
             icon_path=str(resource_path("app_icon.ico")),
@@ -185,6 +219,8 @@ class TrackerApp:
         self.root.bind("<Unmap>", self._on_window_minimized)
         if self.settings.get("overlay_enabled"):
             self._start_hotkey_listener()
+        if self.settings.get("search_overlay_enabled"):
+            self._start_search_hotkey_listener()
 
         self._build_layout()
         self._load_cached_data(initial=True)
@@ -201,6 +237,9 @@ class TrackerApp:
         # Kick off the auto-refresh loop after the initial fetch settles.
         self.root.after(1500, self._schedule_next_auto_refresh)
         self.root.after(60000, self._session_tick)
+        # First price-alert check shortly after startup, once the initial
+        # fetches have settled; the poll then reschedules itself.
+        self.root.after(8000, self._run_price_alert_poll)
 
         # --run-at-boot launched with --minimized: apply after the window
         # has fully constructed (deferred via after(), not done inline
@@ -451,6 +490,8 @@ class TrackerApp:
         self._build_maps_section()
         self._build_matches_section()
         self._build_community_section()
+        self._build_lookup_section()
+        self._build_alerts_section()
         self._build_settings_section()
         self._show_section(self.active_section)
 
@@ -805,8 +846,16 @@ class TrackerApp:
         tk.Label(box, text=title, bg=c["BG_TOP"], fg=c["FG"],
                  font=("Segoe UI Semibold", 22), anchor="w").pack(fill="x")
         if subtitle:
-            tk.Label(box, text=subtitle, bg=c["BG_TOP"], fg=c["FG_MUTED"],
-                     font=("Segoe UI", 10), anchor="w").pack(fill="x", pady=(6, 0))
+            sub = tk.Label(box, text=subtitle, bg=c["BG_TOP"], fg=c["FG_MUTED"],
+                           font=("Segoe UI", 10), anchor="w", justify="left")
+            sub.pack(fill="x", pady=(6, 0))
+            # Dynamic, not a fixed number: every other subtitle here has
+            # been short enough that this never mattered before, but
+            # Player Lookup's is long enough to actually overflow rather
+            # than wrap without it - same fix as every other label in
+            # this app that's ever hit this.
+            sub.bind("<Configure>",
+                    lambda e: e.widget.configure(wraplength=e.width))
 
     def _build_overview_section(self):
         c = self.colors
@@ -1583,7 +1632,18 @@ class TrackerApp:
         self.profile_inner.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.profile_inner, anchor="nw")
+        profile_inner_win = canvas.create_window(
+            (0, 0), window=self.profile_inner, anchor="nw")
+        # Missing until now, unlike every section built after this one
+        # (Settings, Player Lookup): without this, the inner frame never
+        # tracks the canvas's actual width, so it sits at whatever width
+        # its own content happens to request and everything inside stays
+        # that narrow regardless of how wide the window is - confirmed
+        # directly from a wide-monitor screenshot showing the whole
+        # Profile tab pinned to a narrow column with a large unused gap
+        # next to it.
+        canvas.bind("<Configure>",
+                   lambda e: canvas.itemconfig(profile_inner_win, width=e.width))
         canvas.configure(yscrollcommand=scroll.set)
         # Pack the scrollbar before the canvas: with only the canvas
         # using expand=True, packing it first claims the *entire*
@@ -2148,6 +2208,891 @@ class TrackerApp:
             ))
 
     # ------------------------------------------------------------------
+    # Player Lookup section (deltaforceapi.com - third-party, kept
+    # visually and architecturally separate from the official-API data
+    # everywhere else in this app)
+    # ------------------------------------------------------------------
+    def _build_lookup_section(self):
+        c = self.colors
+        frame = tk.Frame(self.content, bg=c["BG_TOP"])
+        self._section_frames["lookup"] = frame
+
+        self._section_heading(
+            frame, "Player Lookup",
+            "Look up any player's combat stats and stash value by name - "
+            "from deltaforceapi.com, a third-party data source kept "
+            "separate from the official API everything else in this app "
+            "uses. Works for teammates, opponents, or yourself, though a "
+            "player the service has never seen before may take a few "
+            "minutes before stats are available - it queues first-time "
+            "lookups rather than answering instantly.")
+
+        scroll_holder = tk.Frame(frame, bg=c["BG_TOP"])
+        scroll_holder.pack(fill="both", expand=True)
+        canvas = tk.Canvas(scroll_holder, bg=c["BG_TOP"], highlightthickness=0)
+        scroll = ttk.Scrollbar(scroll_holder, orient="vertical",
+                               command=canvas.yview)
+        inner = tk.Frame(canvas, bg=c["BG_TOP"])
+        inner_win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                   lambda e: canvas.itemconfig(inner_win, width=e.width))
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        bind_mousewheel_to_canvas(canvas)
+
+        # ---- search bar (same visual pattern as the Matches tab's own) ----
+        search_card = Card(inner, c, padding=(16, 10), radius=12, shadow=False)
+        search_card.pack(fill="x", pady=(0, 6), padx=(0, 6))
+        tk.Label(search_card.body, text="⌕", bg=c["SURFACE"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 13)).pack(side="left", padx=(0, 10))
+        self.lookup_search_var = tk.StringVar()
+        self.lookup_entry = tk.Entry(
+            search_card.body, textvariable=self.lookup_search_var, bd=0,
+            bg=c["SURFACE"], fg=c["FG"], insertbackground=c["FG"],
+            font=("Segoe UI", 10), highlightthickness=0)
+        self.lookup_entry.pack(side="left", fill="x", expand=True)
+        self.lookup_entry.bind("<Return>", lambda e: self._start_player_search())
+        self.lookup_search_btn = self._pill_button(
+            search_card.body, "Search", self._start_player_search, primary=True)
+        self.lookup_search_btn.pack(side="left", padx=(10, 0))
+
+        # ---- recent searches (clickable, re-uses the client's own cache
+        # so re-clicking one is instant - no new request) ----
+        self.lookup_recent_row = tk.Frame(inner, bg=c["BG_TOP"])
+        self.lookup_recent_row.pack(fill="x", pady=(0, 18), padx=(0, 6))
+        self._lookup_recent_names = []  # most-recent-first, deduped
+
+        # ---- results: one Frame holding whichever state is current
+        # (empty/loading/not-found/not-configured/a real result), rebuilt
+        # from scratch on every render - this card's whole content
+        # differs enough per state (field count, layout) that patching
+        # specific widgets in place would be more code than it's worth
+        # for something that only re-renders on an explicit search. ----
+        self.lookup_results_card = Card(inner, c, padding=(22, 18), radius=14)
+        self.lookup_results_card.pack(fill="x", padx=(0, 6))
+        self._render_lookup_empty("Search a name above to see their stats.")
+
+    def _render_lookup_empty(self, message: str, is_error: bool = False):
+        c = self.colors
+        for w in self.lookup_results_card.body.winfo_children():
+            w.destroy()
+        tk.Label(self.lookup_results_card.body, text=message,
+                 bg=c["SURFACE"], fg=c["NEGATIVE"] if is_error else c["FG_MUTED"],
+                 font=("Segoe UI", 10), anchor="w", justify="left",
+                 wraplength=700).pack(fill="x")
+
+    def _render_lookup_recent(self):
+        c = self.colors
+        for w in self.lookup_recent_row.winfo_children():
+            w.destroy()
+        if not self._lookup_recent_names:
+            return
+        tk.Label(self.lookup_recent_row, text="Recent:", bg=c["BG_TOP"],
+                 fg=c["FG_MUTED"], font=("Segoe UI", 9)).pack(side="left",
+                                                               padx=(0, 8))
+        for name in self._lookup_recent_names[:6]:
+            btn = self._pill_button(
+                self.lookup_recent_row, name,
+                lambda n=name: self._start_player_search(n), primary=False)
+            btn.pack(side="left", padx=(0, 6))
+
+    def _start_player_search(self, name: str = None):
+        name = (name if name is not None else self.lookup_search_var.get()).strip()
+        if not name:
+            return
+        if not thirdparty_mod.is_configured():
+            self._render_lookup_empty(
+                "Player Lookup isn't set up yet - add a deltaforceapi.com "
+                "key to DELTAFORCEAPI_KEY in delta_force_config.py.",
+                is_error=True)
+            return
+        self.lookup_search_var.set(name)
+        self.lookup_search_btn.set_state("disabled")
+        self._render_lookup_empty(f"Searching for \"{name}\"...")
+        threading.Thread(target=self._player_search_worker,
+                         args=(name,), daemon=True).start()
+
+    def _player_search_worker(self, name: str):
+        result = thirdparty_mod.search_player(name)
+        self.msg_queue.put(("player_search_done", (name, result)))
+
+    # Seconds to wait before each automatic retry after a warm-up comes
+    # back with nothing. Spread out on purpose: the common cause is this
+    # service's own queue still processing a player it hasn't seen
+    # before ("a few minutes"), so hammering it every few seconds would
+    # just be rude and wouldn't help. After the last one it stops until
+    # the person asks again via Refresh Profile.
+    _THIRDPARTY_RETRY_DELAYS = (20, 45, 90, 180, 300)
+
+    def _thirdparty_has_data(self) -> bool:
+        r = self._thirdparty_profile_data
+        return bool(r and (r.get("stats") or r.get("stash")))
+
+    def _linked_nickname(self):
+        return ((self.profile_data or {}).get("player_info") or {}).get("nickname")
+
+    def _maybe_start_thirdparty_warmup(self, manual: bool = False):
+        """Starts fetching the linked user's extended stats.
+
+        Automatic (manual=False): fires once per session, as soon as the
+        nickname is known (from cache at startup, or a first-ever profile
+        fetch). Not repeated on every profile refresh - the point is an
+        early warm-up of this service's analysis queue.
+
+        manual=True is the profile-refresh path: if extended stats
+        still haven't loaded, try again now and restart the retry
+        backoff. This exists because the card used to tell people to
+        "try refreshing the profile" while refreshing did nothing at all
+        - the one-shot flag blocked it, so a single failed or still-
+        queued first request left the card stuck until the app was
+        restarted. If stats are already loaded there's nothing to
+        recover, so it does nothing (no extra requests on every refresh).
+        """
+        if not thirdparty_mod.is_configured():
+            return
+        nickname = self._linked_nickname()
+        if not nickname or self._thirdparty_warmup_inflight:
+            return
+        if manual:
+            if self._thirdparty_has_data():
+                return
+            self._thirdparty_warmup_attempts = 0
+        elif self._thirdparty_warmup_started:
+            return
+        self._thirdparty_warmup_started = True
+        self._begin_thirdparty_fetch(nickname)
+
+    def _begin_thirdparty_fetch(self, nickname: str):
+        self._cancel_thirdparty_retry()
+        self._thirdparty_warmup_inflight = True
+        threading.Thread(target=self._thirdparty_warmup_worker,
+                         args=(nickname,), daemon=True).start()
+
+    def _thirdparty_warmup_worker(self, nickname: str):
+        result = thirdparty_mod.search_player(nickname)
+        self.msg_queue.put(("thirdparty_profile_done", result))
+
+    def _cancel_thirdparty_retry(self):
+        if self._thirdparty_retry_after is not None:
+            try:
+                self.root.after_cancel(self._thirdparty_retry_after)
+            except Exception:
+                pass
+            self._thirdparty_retry_after = None
+
+    def _schedule_thirdparty_retry(self):
+        if self._thirdparty_warmup_attempts >= len(self._THIRDPARTY_RETRY_DELAYS):
+            return    # gave up for now; Refresh Profile starts it over
+        delay = self._THIRDPARTY_RETRY_DELAYS[self._thirdparty_warmup_attempts]
+        self._thirdparty_warmup_attempts += 1
+        self._cancel_thirdparty_retry()
+        self._thirdparty_retry_after = self.root.after(
+            int(delay * 1000), self._retry_thirdparty_fetch)
+
+    def _retry_thirdparty_fetch(self):
+        self._thirdparty_retry_after = None
+        nickname = self._linked_nickname()
+        if (self._thirdparty_has_data() or self._thirdparty_warmup_inflight
+                or not nickname or not thirdparty_mod.is_configured()):
+            return
+        self._begin_thirdparty_fetch(nickname)
+
+    def _on_thirdparty_profile_done(self, result):
+        self._thirdparty_warmup_inflight = False
+        self._thirdparty_warmup_responded = True
+        if result and (result.get("stats") or result.get("stash")):
+            self._thirdparty_profile_data = result
+            self._thirdparty_warmup_attempts = 0
+        elif not self._thirdparty_has_data():
+            # Nothing to show yet: remember what came back (None, or a
+            # player that was found but has no stats yet) and try again
+            # later.
+            self._thirdparty_profile_data = result
+            self._schedule_thirdparty_retry()
+        # else: a refresh came back empty while good data is already on
+        # screen - keep showing the good data, don't wipe it.
+        if self.active_section == "profile":
+            self._render_profile()
+
+    def _build_thirdparty_stats_body(self, parent, result):
+        """Every deltaforceapi.com stat, grouped into labeled sections -
+        shared by the Player Lookup page and the Profile tab's Extended
+        Stats card, both of which show the exact same full breakdown
+        (only the overlay's condensed view stays deliberately short, see
+        its own show_result). Grouping these rather than one flat 38-cell
+        grid is what keeps "all the stats" actually readable - mirrors
+        the sectioning the official-API profile cards already use
+        elsewhere in this app (PLAYER/RANK/COMBAT/ECONOMY/TEAM), down to
+        reusing its own "(Low/Med/High Tier)" style for the per-
+        difficulty breakdown rather than inventing a different format
+        for the same kind of data.
+        """
+        c = self.colors
+        stats = result.get("stats") or {}
+        stash = result.get("stash") or {}
+
+        def section(title, cells):
+            if not cells:
+                return
+            tk.Label(parent, text=title, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 8, "bold"), anchor="w").pack(
+                fill="x", pady=(14, 8))
+            grid = tk.Frame(parent, bg=c["SURFACE"])
+            grid.pack(fill="x")
+            for i, (label, value) in enumerate(cells):
+                col = tk.Frame(grid, bg=c["SURFACE"])
+                col.grid(row=i // 3, column=i % 3, sticky="w",
+                        padx=(0, 28), pady=(0, 10))
+                tk.Label(col, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                         font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x")
+                tk.Label(col, text=value, bg=c["SURFACE"], fg=c["FG"],
+                         font=("Segoe UI Semibold", 13), anchor="w").pack(fill="x")
+
+        if not stats and not stash:
+            return False
+
+        if stats:
+            # Deliberately NOT every field search_player() returns - the
+            # official-API profile cards above already show Total
+            # Matches, Play Time, Current Rank Score, Kills, K/D by
+            # tier, Hit Rate, Headshot Rate, Revives, and all three
+            # extraction-value figures, each from a different snapshot
+            # than this third-party source's, so the same concept shown
+            # twice with two slightly different numbers read as
+            # confusing duplicates rather than useful detail (confirmed
+            # directly from a real screenshot: e.g. K/D by tier appeared
+            # identically in both places). Every field kept here is
+            # something the official cards genuinely don't show at all.
+            section("MATCHES", [
+                ("EXTRACTED", f"{stats['matches_extracted']:,}"),
+                ("LOST", f"{stats['matches_lost']:,}"),
+                ("QUIT", f"{stats['matches_quit']:,}"),
+                ("EXTRACTION RATE", f"{stats['extraction_rate'] * 100:.0f}%"),
+            ])
+            section("COMBAT", [
+                ("K/D RATIO", f"{stats['kd_ratio']:.2f}"),
+                ("TOTAL DEATHS", f"{stats['total_deaths']:,}"),
+                ("KILLS (LOW TIER)", f"{stats['kills_easy']:,}"),
+                ("KILLS (MED TIER)", f"{stats['kills_medium']:,}"),
+                ("KILLS (HIGH TIER)", f"{stats['kills_hard']:,}"),
+                ("DEATHS (LOW TIER)", f"{stats['deaths_easy']:,}"),
+                ("DEATHS (MED TIER)", f"{stats['deaths_medium']:,}"),
+                ("DEATHS (HIGH TIER)", f"{stats['deaths_hard']:,}"),
+            ])
+            section("ACCURACY", [
+                ("BULLETS DISCHARGED", f"{stats['bullets_discharged']:,}"),
+                ("BULLETS HIT", f"{stats['bullets_hit']:,}"),
+                ("BULLETS MISSED", f"{stats['bullets_missed']:,}"),
+                ("BULLETS PER KNOCK", f"{stats['bullets_per_knock']:.1f}"),
+                ("HIT BULLETS PER KNOCK", f"{stats['bullets_hit_per_knock']:.1f}"),
+            ])
+            section("KNOCKS", [
+                ("KNOCKED", f"{stats['knocked_count']:,}"),
+                ("HEADSHOT KNOCKS", f"{stats['knocked_headshots']:,}"),
+            ])
+            section("TEAM PLAY", [
+                ("PICKUPS", f"{stats['pickups']:,}"),
+            ])
+            section("SCORES", [
+                ("COMBAT", f"{stats['score_combat']:,}"),
+                ("SURVIVAL", f"{stats['score_survival']:,}"),
+                ("CO-OP", f"{stats['score_coop']:,}"),
+                ("SEARCH", f"{stats['score_search']:,}"),
+                ("WEALTH", f"{stats['score_wealth']:,}"),
+            ])
+
+        if stash:
+            tk.Label(parent, text="STASH VALUE", bg=c["SURFACE"],
+                     fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
+                     anchor="w").pack(fill="x", pady=(14, 8))
+            stash_grid = tk.Frame(parent, bg=c["SURFACE"])
+            stash_grid.pack(fill="x")
+            for i, (label, key) in enumerate([("Liquid", "liquid"), ("Fixed", "fixed"),
+                                              ("Collection", "collection"), ("Net", "net")]):
+                col = tk.Frame(stash_grid, bg=c["SURFACE"])
+                col.grid(row=i // 2, column=i % 2, sticky="w",
+                        padx=(0, 40), pady=(0, 8))
+                tk.Label(col, text=label.upper(), bg=c["SURFACE"],
+                         fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
+                         anchor="w").pack(fill="x")
+                tk.Label(col, text=core.fmt_money(stash.get(key, 0)),
+                         bg=c["SURFACE"],
+                         fg=c["ACCENT"] if key == "net" else c["FG"],
+                         font=("Segoe UI Semibold", 12), anchor="w").pack(fill="x")
+        return True
+
+    @staticmethod
+    def _format_play_time(seconds: int) -> str:
+        seconds = int(seconds or 0)
+        hours, rem = divmod(seconds, 3600)
+        minutes = rem // 60
+        return f"{hours}h {minutes}m"
+
+    def _render_lookup_result(self, searched_name: str, result):
+        c = self.colors
+        self.lookup_search_btn.set_state("normal")
+
+        if result is None:
+            self._render_lookup_empty(
+                f"No player found for \"{searched_name}\".", is_error=True)
+            return
+
+        if searched_name.lower() in [n.lower() for n in self._lookup_recent_names]:
+            self._lookup_recent_names = [n for n in self._lookup_recent_names
+                                         if n.lower() != searched_name.lower()]
+        self._lookup_recent_names.insert(0, result["name"])
+        self._render_lookup_recent()
+
+        body = self.lookup_results_card.body
+        for w in body.winfo_children():
+            w.destroy()
+
+        header = tk.Frame(body, bg=c["SURFACE"])
+        header.pack(fill="x")
+        tk.Label(header, text=result["name"], bg=c["SURFACE"], fg=c["FG"],
+                 font=("Segoe UI Semibold", 16), anchor="w").pack(side="left")
+        sub_bits = [f"Ops Lv.{result['level_operations']}",
+                   f"Warfare Lv.{result['level_warfare']}"]
+        tk.Label(header, text="  ·  ".join(sub_bits), bg=c["SURFACE"],
+                 fg=c["FG_MUTED"], font=("Segoe UI", 9)).pack(
+            side="left", padx=(10, 0))
+
+        tk.Frame(body, bg=c["BORDER_SOFT"], height=1).pack(
+            fill="x", pady=(14, 14))
+
+        has_data = self._build_thirdparty_stats_body(body, result)
+        if not has_data:
+            tk.Label(body, text="No stats yet for this player - "
+                                "deltaforceapi.com queues players it "
+                                "hasn't analyzed before, so this can "
+                                "take a few minutes. Try again shortly.",
+                     bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 9),
+                     anchor="w", justify="left", wraplength=700).pack(
+                fill="x", pady=(0, 14))
+
+    # ------------------------------------------------------------------
+    # Price Alerts (deltaforceapi.com item search + auction prices)
+    # ------------------------------------------------------------------
+    ALERT_POLL_SECONDS = 60
+
+    def _build_alerts_section(self):
+        c = self.colors
+        frame = tk.Frame(self.content, bg=c["BG_TOP"])
+        self._section_frames["alerts"] = frame
+        # A theme change rebuilds every widget, so anything pointing at
+        # the old ones has to be dropped.
+        self._alert_selected_item = None
+        self._alert_selected_price = None
+        self._alert_search_results = {}
+        self._alert_search_seq = 0
+
+        self._section_heading(
+            frame, "Price Alerts",
+            "Pick an item and the price you'd buy it at - you'll be "
+            "notified the moment its auction price drops to that. Checked "
+            "every minute while the app is open (it can sit minimized or "
+            "in the tray). Prices are timestamped snapshots from "
+            "deltaforceapi.com, so they can trail the live auction house "
+            "slightly; each alert shows how fresh its last price is.")
+
+        scroll_holder = tk.Frame(frame, bg=c["BG_TOP"])
+        scroll_holder.pack(fill="both", expand=True)
+        canvas = tk.Canvas(scroll_holder, bg=c["BG_TOP"], highlightthickness=0)
+        scroll = ttk.Scrollbar(scroll_holder, orient="vertical",
+                               command=canvas.yview)
+        inner = tk.Frame(canvas, bg=c["BG_TOP"])
+        inner_win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfig(inner_win, width=e.width))
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        bind_mousewheel_to_canvas(canvas)
+
+        # ---- 1. search ----
+        search_card = Card(inner, c, padding=(16, 10), radius=12, shadow=False)
+        search_card.pack(fill="x", pady=(0, 10), padx=(0, 6))
+        tk.Label(search_card.body, text="⌕", bg=c["SURFACE"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 13)).pack(side="left", padx=(0, 10))
+        self.alert_search_var = tk.StringVar()
+        self.alert_search_entry = tk.Entry(
+            search_card.body, textvariable=self.alert_search_var, bd=0,
+            bg=c["SURFACE"], fg=c["FG"], insertbackground=c["FG"],
+            font=("Segoe UI", 10), highlightthickness=0)
+        self.alert_search_entry.pack(side="left", fill="x", expand=True)
+        self.alert_search_entry.bind(
+            "<Return>", lambda e: self._start_alert_item_search())
+        self.alert_search_btn = self._pill_button(
+            search_card.body, "Find Item", self._start_alert_item_search,
+            primary=True)
+        self.alert_search_btn.pack(side="left", padx=(10, 0))
+
+        # ---- 2. results ----
+        self.alert_results_card = Card(inner, c, padding=(22, 16), radius=14)
+        self.alert_results_card.pack(fill="x", pady=(0, 10), padx=(0, 6))
+        if thirdparty_mod.is_configured():
+            self._render_alert_results_message(
+                "Search for an item above - a partial name works, e.g. "
+                "\"Reactor Master\".")
+        else:
+            self._render_alert_results_message(
+                "Price Alerts need a deltaforceapi.com key - add one to "
+                "DELTAFORCEAPI_KEY in delta_force_config.py.")
+
+        # ---- 3. set the alert ----
+        form = Card(inner, c, padding=(22, 16), radius=14)
+        form.pack(fill="x", pady=(0, 10), padx=(0, 6))
+        tk.Label(form.body, text="SET AN ALERT", bg=c["SURFACE"],
+                 fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
+                 anchor="w").pack(fill="x")
+        self.alert_item_label = tk.Label(
+            form.body, text="No item selected - find one above and click it.",
+            bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI Semibold", 12),
+            anchor="w", justify="left", wraplength=640)
+        self.alert_item_label.pack(fill="x", pady=(8, 2))
+        self.alert_price_label = tk.Label(
+            form.body, text="", bg=c["SURFACE"], fg=c["FG_MUTED"],
+            font=("Segoe UI", 9), anchor="w")
+        self.alert_price_label.pack(fill="x")
+
+        target_row = tk.Frame(form.body, bg=c["SURFACE"])
+        target_row.pack(fill="x", pady=(14, 0))
+        tk.Label(target_row, text="Notify me when it drops to", bg=c["SURFACE"],
+                 fg=c["FG_DIM"], font=("Segoe UI", 10)).pack(side="left",
+                                                              padx=(0, 12))
+        entry_wrap = tk.Frame(target_row, bg=c["SURFACE_ALT"])
+        entry_wrap.pack(side="left")
+        self.alert_target_var = tk.StringVar()
+        self.alert_target_entry = tk.Entry(
+            entry_wrap, textvariable=self.alert_target_var, bd=0, width=16,
+            bg=c["SURFACE_ALT"], fg=c["FG"], insertbackground=c["FG"],
+            font=("Segoe UI", 11), highlightthickness=0)
+        self.alert_target_entry.pack(padx=10, pady=7)
+        self.alert_target_entry.bind(
+            "<Return>", lambda e: self._add_price_alert())
+        tk.Label(target_row, text="credits or less", bg=c["SURFACE"],
+                 fg=c["FG_DIM"], font=("Segoe UI", 10)).pack(side="left",
+                                                              padx=(10, 12))
+        self._pill_button(target_row, "Add Alert", self._add_price_alert,
+                          primary=True).pack(side="left")
+        tk.Label(form.body,
+                 text="Type the full amount (5,000,000) or shorthand: 5m, "
+                      "6.5m, 750k.", bg=c["SURFACE"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(8, 0))
+        self.alert_form_status = tk.Label(
+            form.body, text="", bg=c["SURFACE"], fg=c["FG_MUTED"],
+            font=("Segoe UI", 9), anchor="w", justify="left", wraplength=640)
+        self.alert_form_status.pack(fill="x", pady=(6, 0))
+
+        # ---- 4. watchlist ----
+        sound_row = tk.Frame(inner, bg=c["BG_TOP"])
+        sound_row.pack(fill="x", pady=(0, 10), padx=(0, 6))
+        self.alert_sound_var = tk.BooleanVar(
+            value=self.settings.get("price_alert_sound", True))
+        sound_wrap = tk.Frame(sound_row, bg=c["BG_TOP"])
+        sound_wrap.pack(fill="x")
+        switch = ToggleSwitch(sound_wrap, c, self.alert_sound_var,
+                              command=self._on_price_alert_sound_toggle,
+                              bg=c["BG_TOP"])
+        switch.pack(side="left", padx=(0, 10), anchor="n", pady=(2, 0))
+        # Left-anchored and wrapping, not one long centered line: a Label
+        # given less width than its text centers it and clips BOTH ends
+        # (the first version of this row lost "Play a" off the left and
+        # "game)" off the right, caught from a screenshot).
+        text_col = tk.Frame(sound_wrap, bg=c["BG_TOP"])
+        text_col.pack(side="left", fill="x", expand=True)
+        tk.Label(text_col, text="Play a sound when an alert triggers",
+                 bg=c["BG_TOP"], fg=c["FG_DIM"], font=("Segoe UI", 10),
+                 anchor="w").pack(fill="x")
+        sound_hint = tk.Label(
+            text_col,
+            text="The pop-up can't appear over an exclusive-fullscreen "
+                 "game, so the sound is often what actually reaches you.",
+            bg=c["BG_TOP"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
+            anchor="w", justify="left")
+        sound_hint.pack(fill="x")
+        sound_hint.bind("<Configure>",
+                        lambda e: e.widget.configure(wraplength=max(e.width, 200)))
+
+        self.alert_list_card = Card(inner, c, padding=(22, 16), radius=14)
+        self.alert_list_card.pack(fill="x", padx=(0, 6))
+        self._render_alert_list()
+
+    # ---- search / select ----
+    def _render_alert_results_message(self, message: str, is_error: bool = False):
+        c = self.colors
+        body = self.alert_results_card.body
+        for w in body.winfo_children():
+            w.destroy()
+        self._alert_search_results = {}
+        tk.Label(body, text=message, bg=c["SURFACE"],
+                 fg=c["NEGATIVE"] if is_error else c["FG_MUTED"],
+                 font=("Segoe UI", 10), anchor="w", justify="left",
+                 wraplength=700).pack(fill="x")
+
+    @staticmethod
+    def _friendly_item_type(raw: str) -> str:
+        # "ITEM_TYPE_KEYCARD" -> "Keycard"
+        text = (raw or "").replace("ITEM_TYPE_", "").replace("_", " ").strip()
+        return text.title() or "Item"
+
+    def _render_alert_results(self, items: list):
+        c = self.colors
+        body = self.alert_results_card.body
+        for w in body.winfo_children():
+            w.destroy()
+        self._alert_search_results = {}
+
+        tk.Label(body, text="PICK AN ITEM", bg=c["SURFACE"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 8, "bold"), anchor="w").pack(
+            fill="x", pady=(0, 8))
+        tree = ttk.Treeview(body, columns=("name", "type"), show="headings",
+                            height=min(len(items), 8), selectmode="browse")
+        tree.heading("name", text="Item", anchor="w")
+        tree.heading("type", text="Type", anchor="w")
+        tree.column("name", width=420, anchor="w", stretch=True)
+        tree.column("type", width=150, anchor="w", stretch=False)
+        tree.tag_configure("even", background=c["SURFACE"])
+        tree.tag_configure("odd", background=c["SURFACE_ALT"])
+        for i, item in enumerate(items):
+            iid = f"it{i}"
+            self._alert_search_results[iid] = item
+            tree.insert("", "end", iid=iid,
+                        values=(item["name"],
+                                self._friendly_item_type(item["type"])),
+                        tags=("even" if i % 2 == 0 else "odd",))
+        tree.bind("<<TreeviewSelect>>", self._on_alert_result_selected)
+        tree.configure(cursor="hand2")
+        tree.pack(fill="x")
+        self.alert_results_tree = tree
+
+    def _start_alert_item_search(self):
+        query = self.alert_search_var.get().strip()
+        if not query:
+            return
+        if not thirdparty_mod.is_configured():
+            self._render_alert_results_message(
+                "Price Alerts need a deltaforceapi.com key - add one to "
+                "DELTAFORCEAPI_KEY in delta_force_config.py.", is_error=True)
+            return
+        # Sequence number, so if two searches are ever in flight (Enter
+        # pressed again before the first finishes) only the newest one's
+        # answer is allowed to draw - the slower, older one can't land
+        # afterwards and replace what the person is actually looking at.
+        self._alert_search_seq += 1
+        seq = self._alert_search_seq
+        self.alert_search_btn.set_state("disabled")
+        self._render_alert_results_message(f'Searching for "{query}"...')
+        threading.Thread(target=self._alert_search_worker,
+                         args=(seq, query), daemon=True).start()
+
+    def _alert_search_worker(self, seq: int, query: str):
+        items = thirdparty_mod.search_items(query)
+        self.msg_queue.put(("alert_item_search_done", (seq, query, items)))
+
+    def _on_alert_item_search_done(self, seq, query, items):
+        if not hasattr(self, "alert_results_card") or seq != self._alert_search_seq:
+            return
+        self.alert_search_btn.set_state("normal")
+        if items is None:
+            self._render_alert_results_message(
+                "Couldn't search right now - check your connection and "
+                "try again.", is_error=True)
+        elif not items:
+            self._render_alert_results_message(
+                f'No tradeable items match "{query}". Try a shorter or '
+                f"different name.")
+        else:
+            self._render_alert_results(items)
+
+    def _on_alert_result_selected(self, _event=None):
+        sel = self.alert_results_tree.selection()
+        if not sel:
+            return
+        item = self._alert_search_results.get(sel[0])
+        if not item:
+            return
+        c = self.colors
+        self._alert_selected_item = item
+        self._alert_selected_price = None
+        self.alert_item_label.configure(text=item["name"], fg=c["FG"])
+        self.alert_price_label.configure(text="Checking current price...",
+                                         fg=c["FG_MUTED"])
+        self._set_alert_form_status("")
+        threading.Thread(target=self._alert_price_worker,
+                         args=(item["id"],), daemon=True).start()
+
+    def _alert_price_worker(self, item_id: str):
+        info = thirdparty_mod.get_item_price(item_id)
+        self.msg_queue.put(("alert_item_price_done", (item_id, info)))
+
+    def _on_alert_item_price_done(self, item_id, info):
+        selected = self._alert_selected_item
+        if not selected or selected["id"] != item_id:
+            return   # they've already clicked a different item
+        c = self.colors
+        self._alert_selected_price = info
+        if info:
+            age = alerts_mod.age_text(info.get("as_of", ""))
+            text = f"Current price: {core.fmt_money(info['price'])}"
+            if age:
+                text += f"  ·  as of {age}"
+            self.alert_price_label.configure(text=text, fg=c["FG_DIM"])
+        else:
+            self.alert_price_label.configure(
+                text="No price available for this item right now - you "
+                     "can still set an alert and it'll start tracking "
+                     "once one appears.", fg=c["FG_MUTED"])
+
+    # ---- add / remove ----
+    def _set_alert_form_status(self, text: str, kind: str = "muted"):
+        c = self.colors
+        color = {"error": c["NEGATIVE"], "good": c["POSITIVE"]}.get(kind, c["FG_MUTED"])
+        self.alert_form_status.configure(text=text, fg=color)
+
+    def _add_price_alert(self):
+        item = self._alert_selected_item
+        if not item:
+            self._set_alert_form_status(
+                "Pick an item from the search results first.", "error")
+            return
+        target = alerts_mod.parse_price(self.alert_target_var.get())
+        if target is None:
+            self._set_alert_form_status(
+                "Enter a price like 5000000, 5,000,000, or 5m.", "error")
+            return
+
+        info = self._alert_selected_price
+        alerts, status = alerts_mod.add_alert(
+            self._price_alerts, item["id"], item["name"], target, info)
+        if status == "full":
+            self._set_alert_form_status(
+                f"You can track up to {alerts_mod.MAX_ALERTS} items - "
+                f"remove one first.", "error")
+            return
+        self._price_alerts = alerts
+
+        # Judge it against the price already on screen right away rather
+        # than making the person wait up to a minute for the next poll.
+        fired_alert = None
+        if info:
+            for i, a in enumerate(self._price_alerts):
+                if a["item_id"] == item["id"]:
+                    updated, fired = alerts_mod.evaluate(a, info)
+                    self._price_alerts[i] = updated
+                    if fired:
+                        fired_alert = updated
+                    break
+        alerts_mod.save_alerts(self._price_alerts)
+        self._render_alert_list()
+
+        verb = "Updated" if status == "updated" else "Alert set"
+        msg = f"{verb}: {item['name']} at {core.fmt_money(target)} or less."
+        if fired_alert:
+            msg += " It's already at or below that, so you're being notified now."
+        self._set_alert_form_status(msg, "good")
+        self.alert_target_var.set("")
+        if fired_alert:
+            self._notify_price_alert(fired_alert)
+
+    def _remove_price_alert(self, item_id: str):
+        self._price_alerts = alerts_mod.remove_alert(self._price_alerts, item_id)
+        alerts_mod.save_alerts(self._price_alerts)
+        self._render_alert_list()
+
+    def _render_alert_list(self):
+        c = self.colors
+        body = self.alert_list_card.body
+        for w in body.winfo_children():
+            w.destroy()
+        tk.Label(body,
+                 text=f"YOUR ALERTS  ({len(self._price_alerts)}/{alerts_mod.MAX_ALERTS})",
+                 bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
+                 anchor="w").pack(fill="x")
+        if not self._price_alerts:
+            tk.Label(body, text="No alerts yet - find an item above and set "
+                                "the price you'd buy it at.",
+                     bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 10),
+                     anchor="w").pack(fill="x", pady=(10, 0))
+            return
+
+        for i, a in enumerate(self._price_alerts):
+            if i:
+                tk.Frame(body, bg=c["BORDER_SOFT"], height=1).pack(
+                    fill="x", pady=(10, 0))
+            row = tk.Frame(body, bg=c["SURFACE"])
+            row.pack(fill="x", pady=(10, 0))
+            left = tk.Frame(row, bg=c["SURFACE"])
+            left.pack(side="left", fill="x", expand=True)
+            top = tk.Frame(left, bg=c["SURFACE"])
+            top.pack(fill="x")
+            tk.Label(top, text=a["name"], bg=c["SURFACE"], fg=c["FG"],
+                     font=("Segoe UI Semibold", 11), anchor="w").pack(side="left")
+            if a.get("triggered"):
+                status_pill(top, c, "Price met", "good").pack(side="left", padx=(8, 0))
+            elif a.get("last_price") is None:
+                status_pill(top, c, "Waiting for a price", "neutral").pack(
+                    side="left", padx=(8, 0))
+            else:
+                status_pill(top, c, "Watching", "neutral").pack(side="left", padx=(8, 0))
+
+            if a.get("last_price") is not None:
+                detail = f"Now {core.fmt_money(a['last_price'])}"
+            else:
+                detail = "No price yet"
+            detail += f"   ·   Target {core.fmt_money(a['target'])}"
+            age = alerts_mod.age_text(a.get("price_as_of", ""))
+            if age:
+                detail += f"   ·   as of {age}"
+            tk.Label(left, text=detail, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(2, 0))
+            self._pill_button(
+                row, "Remove",
+                lambda iid=a["item_id"]: self._remove_price_alert(iid)
+            ).pack(side="right")
+
+    # ---- polling ----
+    def _schedule_price_alert_poll(self, delay_ms: int):
+        if self._alert_poll_after is not None:
+            try:
+                self.root.after_cancel(self._alert_poll_after)
+            except Exception:
+                pass
+        self._alert_poll_after = self.root.after(delay_ms, self._run_price_alert_poll)
+
+    def _run_price_alert_poll(self):
+        # Reschedule first, unconditionally: the loop keeps ticking even
+        # with nothing to check, so an alert added later is picked up on
+        # the next tick without anything needing to restart it.
+        self._schedule_price_alert_poll(self.ALERT_POLL_SECONDS * 1000)
+        if (not self._price_alerts or self._alert_poll_running
+                or not thirdparty_mod.is_configured()):
+            return
+        self._alert_poll_running = True
+        ids = [a["item_id"] for a in self._price_alerts]
+        threading.Thread(target=self._price_alert_poll_worker,
+                         args=(ids,), daemon=True).start()
+
+    def _price_alert_poll_worker(self, item_ids: list):
+        results = {}
+        try:
+            for i, item_id in enumerate(item_ids):
+                if i:
+                    time.sleep(0.3)   # spread requests out, not a burst
+                results[item_id] = thirdparty_mod.get_item_price(item_id)
+        finally:
+            # In a finally so the "poll running" flag always clears even
+            # if something unexpected raised mid-loop - otherwise one
+            # bad poll would silently stop every future one.
+            self.msg_queue.put(("price_alert_poll_done", results))
+
+    def _apply_price_results(self, results: dict):
+        fired = []
+        updated_list = []
+        for a in self._price_alerts:
+            if a["item_id"] in results:
+                updated, did_fire = alerts_mod.evaluate(a, results[a["item_id"]])
+                updated_list.append(updated)
+                if did_fire:
+                    fired.append(updated)
+            else:
+                updated_list.append(a)   # added/removed while the poll was running
+        self._price_alerts = updated_list
+        alerts_mod.save_alerts(self._price_alerts)
+        if self.active_section == "alerts" and hasattr(self, "alert_list_card"):
+            self._render_alert_list()
+        for a in fired:
+            self._notify_price_alert(a)
+
+    # ---- notifying ----
+    def _notify_price_alert(self, alert: dict):
+        price = alert.get("last_price")
+        self._show_screen_toast(
+            f"Price alert: {alert['name']}",
+            f"Now {core.fmt_money(price)} - at or below your target of "
+            f"{core.fmt_money(alert['target'])}.",
+            duration_ms=12000)
+        self._play_price_alert_sound()
+        self.set_status(f"Price alert: {alert['name']} is now "
+                        f"{core.fmt_money(price)}.")
+
+    def _play_price_alert_sound(self):
+        if not self.settings.get("price_alert_sound", True):
+            return
+        try:
+            import winsound   # Windows-only; ImportError elsewhere is fine
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
+
+    def _on_price_alert_sound_toggle(self):
+        value = self.alert_sound_var.get()
+        self.settings["price_alert_sound"] = value
+        _save_settings({"price_alert_sound": value})
+
+    def _show_screen_toast(self, title: str, message: str, duration_ms: int = 10000):
+        """A toast anchored to the SCREEN, not to the app window.
+
+        _show_toast positions itself relative to the main window - fine
+        for "new matches fetched" while the app is open, wrong here: a
+        price alert matters most when the tracker is minimized or in the
+        tray while someone's playing, and a minimized window can report
+        coordinates far off-screen (Windows parks minimized windows
+        around -32000,-32000), so a window-relative toast risks
+        appearing where nobody can see it. This one uses the screen's
+        own size, like the overlay does - and is tested with the main
+        window withdrawn. Several firing at once stack upward instead of
+        drawing on top of each other; clicking one dismisses it.
+        """
+        try:
+            c = self.colors
+            toast = tk.Toplevel(self.root)
+            toast.overrideredirect(True)
+            toast.attributes("-topmost", True)
+            toast.configure(bg=c["ACCENT"])
+            inner = tk.Frame(toast, bg=c["SURFACE"])
+            inner.pack(padx=2, pady=2, fill="both", expand=True)
+            title_lbl = tk.Label(inner, text=title, bg=c["SURFACE"], fg=c["ACCENT"],
+                                 font=("Segoe UI Semibold", 11), anchor="w",
+                                 wraplength=340, justify="left")
+            title_lbl.pack(fill="x", padx=16, pady=(12, 3))
+            msg_lbl = tk.Label(inner, text=message, bg=c["SURFACE"], fg=c["FG"],
+                               font=("Segoe UI", 10), anchor="w",
+                               wraplength=340, justify="left")
+            msg_lbl.pack(fill="x", padx=16, pady=(0, 14))
+
+            toast.update_idletasks()
+            w, h = toast.winfo_reqwidth(), toast.winfo_reqheight()
+            screen_w, screen_h = toast.winfo_screenwidth(), toast.winfo_screenheight()
+            stacked = sum(th + 10 for _, th in self._alert_toasts)
+            x = max(0, screen_w - w - 24)
+            y = max(0, screen_h - h - 90 - stacked)
+            toast.geometry(f"+{x}+{y}")
+
+            entry = (toast, h)
+            self._alert_toasts.append(entry)
+
+            def close(_event=None):
+                try:
+                    self._alert_toasts.remove(entry)
+                except ValueError:
+                    pass
+                try:
+                    toast.destroy()
+                except tk.TclError:
+                    pass
+            for widget in (toast, inner, title_lbl, msg_lbl):
+                widget.bind("<Button-1>", close)
+            toast.after(duration_ms, close)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # Settings section
     # ------------------------------------------------------------------
     def _build_settings_section(self):
@@ -2322,7 +3267,10 @@ class TrackerApp:
         custom_row.pack(fill="x", pady=(8, 0))
         self._pill_button(
             custom_row, "Record Custom Shortcut",
-            self._show_hotkey_capture_dialog).pack(side="left", padx=(0, 12))
+            lambda: self._show_hotkey_capture_dialog(
+                prefix="overlay", title="Set Overlay Shortcut",
+                on_captured=self._on_overlay_hotkey_captured)
+        ).pack(side="left", padx=(0, 12))
         _, _, _active_label = overlay_mod.resolve_hotkey(self.settings)
         custom_text = (f"Current: {_active_label}"
                        if self.settings.get("overlay_hotkey_source") == "custom"
@@ -2352,6 +3300,70 @@ class TrackerApp:
                           "option won't do anything even if checked.",
                      bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
                      anchor="w").pack(fill="x", pady=(4, 0))
+
+        # ---- Search Overlay (Player Lookup, in-game) ----
+        section_title("Search Overlay",
+                      "Look up a teammate or opponent by name without "
+                      "leaving the game - its own shortcut, independent "
+                      "of the overlay above. Uses the same deltaforceapi.com "
+                      "data as the Player Lookup page.",
+                      icon_key="lookup", pill=("Windows Only", "neutral"))
+
+        search_overlay_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
+        search_overlay_card.pack(fill="x", pady=(0, 6))
+
+        self.settings_search_overlay_var = tk.BooleanVar(
+            value=self.settings.get("search_overlay_enabled", False))
+        self._toggle_row(search_overlay_card.body, "Enable search overlay hotkey",
+                         self.settings_search_overlay_var,
+                         self._on_search_overlay_enabled_toggle)
+
+        search_hotkey_row = tk.Frame(search_overlay_card.body, bg=c["SURFACE"])
+        search_hotkey_row.pack(fill="x", pady=(10, 0))
+        tk.Label(search_hotkey_row, text="Shortcut", bg=c["SURFACE"], fg=c["FG_DIM"],
+                 font=("Segoe UI", 10)).pack(side="left", padx=(0, 12))
+        self.search_hotkey_var = tk.StringVar(
+            value=self.settings.get("search_hotkey", "Ctrl+Shift+O"))
+        search_hotkey_combo = ttk.Combobox(
+            search_hotkey_row, textvariable=self.search_hotkey_var,
+            values=[label for label, _, _ in overlay_mod.HOTKEY_PRESETS],
+            state="readonly", width=16)
+        search_hotkey_combo.pack(side="left")
+        search_hotkey_combo.bind("<<ComboboxSelected>>",
+                                 lambda e: self._on_search_hotkey_change())
+
+        search_custom_row = tk.Frame(search_overlay_card.body, bg=c["SURFACE"])
+        search_custom_row.pack(fill="x", pady=(8, 0))
+        self._pill_button(
+            search_custom_row, "Record Custom Shortcut",
+            lambda: self._show_hotkey_capture_dialog(
+                prefix="search", title="Set Search Overlay Shortcut",
+                on_captured=self._on_search_hotkey_captured)
+        ).pack(side="left", padx=(0, 12))
+        _, _, _search_active_label = overlay_mod.resolve_hotkey(
+            self.settings, prefix="search", default_label="Ctrl+Shift+O")
+        search_custom_text = (
+            f"Current: {_search_active_label}"
+            if self.settings.get("search_hotkey_source") == "custom"
+            else "Using the preset above")
+        self.search_custom_hotkey_label = tk.Label(
+            search_custom_row, text=search_custom_text, bg=c["SURFACE"],
+            fg=c["FG_MUTED"], font=("Segoe UI", 9))
+        self.search_custom_hotkey_label.pack(side="left")
+
+        self.search_overlay_status_label = tk.Label(
+            search_overlay_card.body, text="", bg=c["SURFACE"], fg=c["FG_MUTED"],
+            font=("Segoe UI", 8), anchor="w", justify="left", wraplength=740)
+        self.search_overlay_status_label.pack(fill="x", pady=(10, 0))
+        self._update_search_overlay_status_label()
+
+        if not thirdparty_mod.is_configured():
+            tk.Label(search_overlay_card.body,
+                     text="Player Lookup isn't set up yet - add a "
+                          "deltaforceapi.com key to DELTAFORCEAPI_KEY in "
+                          "delta_force_config.py to use this.",
+                     bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
+                     anchor="w", wraplength=740).pack(fill="x", pady=(4, 0))
 
         # ---- Startup ----
         section_title("Startup",
@@ -2629,7 +3641,9 @@ class TrackerApp:
             self._start_hotkey_listener()  # .start() already stops any previous one
         self._update_overlay_status_label()
 
-    def _show_hotkey_capture_dialog(self):
+    def _show_hotkey_capture_dialog(self, prefix: str = "overlay",
+                                    title: str = "Set Overlay Shortcut",
+                                    on_captured=None):
         """Records a hotkey the person presses themselves, rather than
         picking from HOTKEY_PRESETS. On Windows, Tk's event.keycode maps
         directly onto the Win32 virtual-key code RegisterHotKey wants -
@@ -2644,11 +3658,20 @@ class TrackerApp:
         Windows message (WM_SYSKEYDOWN) that doesn't reliably surface in
         a plain <KeyPress> binding's state, so trusting the bitmask alone
         risks silently dropping Alt from a captured combination.
+
+        prefix picks which independent hotkey this capture is FOR (see
+        overlay_mod.resolve_hotkey) - the main overlay's or the Player
+        Lookup search overlay's - so this one dialog serves both rather
+        than each needing its own near-identical copy. on_captured(label),
+        if given, runs after settings are saved, so each caller can do
+        its OWN "apply the new hotkey" work (which listener to restart,
+        which status label to update) without this dialog needing to
+        know about either one specifically.
         """
         try:
             c = self.colors
             win = tk.Toplevel(self.root)
-            win.title("Set Overlay Shortcut")
+            win.title(title)
             win.configure(bg=c["BG_TOP"])
             win.resizable(False, False)
             win.transient(self.root)
@@ -2727,21 +3750,18 @@ class TrackerApp:
                     mods |= overlay_mod.MOD_SHIFT
                 label = held_text() + "+" + format_key_name(event.keysym)
 
-                self.settings["overlay_hotkey_mods"] = mods
-                self.settings["overlay_hotkey_vk"] = event.keycode
-                self.settings["overlay_hotkey_custom_label"] = label
-                self.settings["overlay_hotkey_source"] = "custom"
+                self.settings[f"{prefix}_hotkey_mods"] = mods
+                self.settings[f"{prefix}_hotkey_vk"] = event.keycode
+                self.settings[f"{prefix}_hotkey_custom_label"] = label
+                self.settings[f"{prefix}_hotkey_source"] = "custom"
                 _save_settings({
-                    "overlay_hotkey_mods": mods,
-                    "overlay_hotkey_vk": event.keycode,
-                    "overlay_hotkey_custom_label": label,
-                    "overlay_hotkey_source": "custom",
+                    f"{prefix}_hotkey_mods": mods,
+                    f"{prefix}_hotkey_vk": event.keycode,
+                    f"{prefix}_hotkey_custom_label": label,
+                    f"{prefix}_hotkey_source": "custom",
                 })
-                if self.settings.get("overlay_enabled"):
-                    self._start_hotkey_listener()
-                self._update_overlay_status_label()
-                if hasattr(self, "custom_hotkey_label"):
-                    self.custom_hotkey_label.configure(text=f"Current: {label}")
+                if on_captured:
+                    on_captured(label)
                 win.destroy()
                 return "break"
 
@@ -2757,6 +3777,65 @@ class TrackerApp:
             win.focus_force()
         except Exception:
             pass
+
+    def _on_overlay_hotkey_captured(self, label: str):
+        if self.settings.get("overlay_enabled"):
+            self._start_hotkey_listener()
+        self._update_overlay_status_label()
+        if hasattr(self, "custom_hotkey_label"):
+            self.custom_hotkey_label.configure(text=f"Current: {label}")
+
+    def _update_search_overlay_status_label(self):
+        if not hasattr(self, "search_overlay_status_label"):
+            return
+        c = self.colors
+        if not self.settings.get("search_overlay_enabled"):
+            self.search_overlay_status_label.configure(
+                text="Off. Turn on to look up players without leaving the game.",
+                fg=c["FG_MUTED"])
+        elif not overlay_mod.IS_WINDOWS:
+            self.search_overlay_status_label.configure(
+                text="This build isn't running on Windows, so the global "
+                     "shortcut can't be registered here.", fg=c["NEGATIVE"])
+        elif self.search_hotkey_listener.is_registered():
+            _, _, label = overlay_mod.resolve_hotkey(
+                self.settings, prefix="search", default_label="Ctrl+Shift+O")
+            self.search_overlay_status_label.configure(
+                text=f"Active — press {label} anywhere to search.",
+                fg=c["POSITIVE"])
+        else:
+            err = (self.search_hotkey_listener.last_error
+                  or "Couldn't register the shortcut.")
+            self.search_overlay_status_label.configure(text=err, fg=c["NEGATIVE"])
+
+    def _on_search_overlay_enabled_toggle(self):
+        enabled = self.settings_search_overlay_var.get()
+        _save_settings({"search_overlay_enabled": enabled})
+        self.settings["search_overlay_enabled"] = enabled
+        if enabled:
+            self._start_search_hotkey_listener()
+        else:
+            self._stop_search_hotkey_listener()
+            self.search_overlay.hide()
+        self._update_search_overlay_status_label()
+
+    def _on_search_hotkey_change(self):
+        label = self.search_hotkey_var.get()
+        _save_settings({"search_hotkey": label, "search_hotkey_source": "preset"})
+        self.settings["search_hotkey"] = label
+        self.settings["search_hotkey_source"] = "preset"
+        if hasattr(self, "search_custom_hotkey_label"):
+            self.search_custom_hotkey_label.configure(text="Using the preset above")
+        if self.settings.get("search_overlay_enabled"):
+            self._start_search_hotkey_listener()
+        self._update_search_overlay_status_label()
+
+    def _on_search_hotkey_captured(self, label: str):
+        if self.settings.get("search_overlay_enabled"):
+            self._start_search_hotkey_listener()
+        self._update_search_overlay_status_label()
+        if hasattr(self, "search_custom_hotkey_label"):
+            self.search_custom_hotkey_label.configure(text=f"Current: {label}")
 
     def _on_minimize_to_tray_toggle(self):
         enabled = self.settings_tray_var.get()
@@ -3315,6 +4394,17 @@ class TrackerApp:
         _save_settings({"last_seen_version": APP_VERSION})
 
     def _show_whats_new_popup(self, entries):
+        """The bullet list lives in a scrollable box with a capped height,
+        with "Got It" pinned beneath it and the window clamped on-screen.
+
+        _maybe_show_whats_new collects EVERY entry newer than the user's
+        last-seen version, so someone who skipped a release sees several
+        stacked. The first version of this dialog just grew to fit: from
+        1.3.0 to 1.5.0 that was ~1080px on a 768px laptop screen, with the
+        top above the screen edge and "Got It" below the bottom - a popup
+        that couldn't be dismissed. When everything fits (the usual one-
+        release upgrade) it looks exactly as before: no scrollbar.
+        """
         try:
             c = self.colors
             win = tk.Toplevel(self.root)
@@ -3331,14 +4421,31 @@ class TrackerApp:
                      fg=c["FG"], font=("Segoe UI Semibold", 14),
                      anchor="w").pack(fill="x", pady=(0, 14))
 
+            # Packed BEFORE the list, side="bottom": pack hands space out
+            # in order, so a button packed last is the first thing clipped
+            # when the window is too short.
+            btn = self._pill_button(body, "Got It", win.destroy, primary=True)
+            btn.pack(side="bottom", anchor="e", pady=(8, 0))
+
+            holder = tk.Frame(body, bg=c["BG_TOP"])
+            holder.pack(side="top", fill="both", expand=True)
+            canvas = tk.Canvas(holder, bg=c["BG_TOP"], highlightthickness=0)
+            scroll = ttk.Scrollbar(holder, orient="vertical", command=canvas.yview)
+            inner = tk.Frame(canvas, bg=c["BG_TOP"])
+            canvas.create_window((0, 0), window=inner, anchor="nw")
+            inner.bind("<Configure>",
+                       lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.configure(yscrollcommand=scroll.set)
+            canvas.pack(side="left", fill="both", expand=True)
+
             multi = len(entries) > 1
             for version, bullets in entries:
                 if multi:
-                    tk.Label(body, text=f"v{version}", bg=c["BG_TOP"],
+                    tk.Label(inner, text=f"v{version}", bg=c["BG_TOP"],
                              fg=c["FG_MUTED"], font=("Segoe UI", 9, "bold"),
                              anchor="w").pack(fill="x", pady=(0, 4))
                 for bullet in bullets:
-                    row = tk.Frame(body, bg=c["BG_TOP"])
+                    row = tk.Frame(inner, bg=c["BG_TOP"])
                     row.pack(fill="x", pady=(0, 8))
                     tk.Label(row, text="•", bg=c["BG_TOP"], fg=c["ACCENT"],
                              font=("Segoe UI", 10), anchor="nw",
@@ -3348,15 +4455,28 @@ class TrackerApp:
                              justify="left", wraplength=380).pack(
                         side="left", fill="x", expand=True)
 
-            btn = self._pill_button(body, "Got It", win.destroy, primary=True)
-            btn.pack(anchor="e", pady=(8, 0))
+            win.update_idletasks()
+            needed = inner.winfo_reqheight()
+            canvas.configure(width=inner.winfo_reqwidth(), height=needed)
+            win.update_idletasks()
+            screen_w, screen_h = win.winfo_screenwidth(), win.winfo_screenheight()
+            # Leave room for the title bar and taskbar; everything that
+            # isn't the list (title, button, padding) is "chrome".
+            chrome = win.winfo_reqheight() - needed
+            list_h = max(120, min(needed, screen_h - 140 - chrome))
+            canvas.configure(height=list_h)
+            if needed > list_h:
+                scroll.pack(side="right", fill="y")
+                bind_mousewheel_to_canvas(canvas)
 
             win.update_idletasks()
-            w = win.winfo_reqwidth()
-            h = win.winfo_reqheight()
+            w, h = win.winfo_reqwidth(), win.winfo_reqheight()
             x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
             y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+            x = max(0, min(x, screen_w - w))
+            y = max(0, min(y, screen_h - h - 40))
             win.geometry(f"{w}x{h}+{x}+{y}")
+            self._whats_new_win = win   # kept so tests/other code can find it
         except Exception:
             pass
 
@@ -3986,14 +5106,21 @@ class TrackerApp:
                      font=("Segoe UI", 10), pady=24).pack(anchor="w")
             return
 
+        # 3 per row, not 2: with the canvas-width-tracking fix above,
+        # this now actually has room to use - 2 was leaving a second
+        # large empty gap next to the cards on anything wider than a
+        # fairly narrow window, which is exactly what the width fix
+        # alone doesn't solve by itself (it makes the row's available
+        # width correct; this is what actually spends it).
+        PER_ROW = 3
         row_frame = None
         for i, (title, stats) in enumerate(sections):
-            if i % 2 == 0:
+            if i % PER_ROW == 0:
                 row_frame = tk.Frame(self.profile_inner, bg=c["BG_TOP"])
                 row_frame.pack(fill="x", pady=8)
             card = Card(row_frame, c, padding=(22, 20), radius=14)
             card.pack(side="left", fill="both", expand=True,
-                      padx=(0 if i % 2 == 0 else 14, 0))
+                      padx=(0 if i % PER_ROW == 0 else 14, 0))
 
             tk.Label(card.body, text=title.upper(), bg=c["SURFACE"],
                      fg=c["FG_MUTED"], font=("Segoe UI", 9, "bold"),
@@ -4007,6 +5134,69 @@ class TrackerApp:
                 tk.Label(line, text=str(value), bg=c["SURFACE"], fg=c["FG"],
                          font=("Segoe UI Semibold", 10),
                          anchor="e").pack(side="right")
+
+        self._render_thirdparty_profile_card()
+
+    def _render_thirdparty_profile_card(self):
+        """deltaforceapi.com data for the linked user - a separate,
+        full-width card below the official-API sections above, not
+        blended into them (same boundary this app has kept since this
+        third-party source was first added).
+
+        Always rendered, even with no key configured. It used to vanish
+        entirely in that case, which meant a blank or overwritten
+        DELTAFORCEAPI_KEY made the advanced stats disappear from the
+        Profile tab with no indication of why or how to get them back.
+        """
+        c = self.colors
+        card = Card(self.profile_inner, c, padding=(22, 18), radius=14)
+        card.pack(fill="x", pady=(8, 0))
+
+        header = tk.Frame(card.body, bg=c["SURFACE"])
+        header.pack(fill="x")
+        tk.Label(header, text="EXTENDED STATS", bg=c["SURFACE"],
+                 fg=c["FG_MUTED"], font=("Segoe UI", 9, "bold"),
+                 anchor="w").pack(side="left")
+        tk.Label(header, text="deltaforceapi.com (third-party)",
+                 bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
+                 anchor="w").pack(side="left", padx=(8, 0))
+
+        def note(text):
+            tk.Label(card.body, text=text, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 9), anchor="w", justify="left",
+                     wraplength=700).pack(fill="x", pady=(10, 0))
+
+        if not thirdparty_mod.is_configured():
+            note("Turned off. Add a deltaforceapi.com key as "
+                 "DELTAFORCEAPI_KEY in delta_force_config.py (add the line "
+                 "if it isn't there) to see bullets fired and hit, kills "
+                 "and deaths by tier, category scores and stash value here.")
+            return
+
+        if not self._thirdparty_warmup_responded:
+            note("Checking deltaforceapi.com for extended stats...")
+            return
+
+        # result None (no match for the name) and "found, but stats/stash
+        # both empty" (the service's queue hasn't processed this player
+        # yet) both end up with nothing to draw, via
+        # _build_thirdparty_stats_body's False return. The app can't
+        # reliably tell them apart, and the queue is the common cause.
+        has_data = self._build_thirdparty_stats_body(
+            card.body, self._thirdparty_profile_data or {})
+        if has_data:
+            return
+        retrying = (self._thirdparty_warmup_inflight
+                    or self._thirdparty_retry_after is not None)
+        if retrying:
+            note("No extended stats yet. This service queues players it "
+                 "hasn't analyzed before, so this can take a few minutes "
+                 "the first time. Retrying automatically in the "
+                 "background.")
+        else:
+            note("No extended stats right now - the service may be down "
+                 "or still processing your account. Use \"Refresh "
+                 "Profile\" in Settings to try again.")
 
     def _update_sidebar_profile(self):
         c = self.colors
@@ -4550,6 +5740,7 @@ class TrackerApp:
         cache = core.load_cache()
         self.profile_data = cache.get("profile")
         self._update_sidebar_profile()
+        self._maybe_start_thirdparty_warmup()
 
         if cache["matches"]:
             self.rows = core.build_rows(cache)
@@ -5123,9 +6314,12 @@ class TrackerApp:
                     if self.active_section == "profile":
                         self._render_profile()
                     self._update_sidebar_profile()
+                    self._maybe_start_thirdparty_warmup(manual=True)
                     self.set_status(f"Profile updated "
                                     f"{datetime.now().strftime('%H:%M:%S')}.")
                     self._set_busy(profile=False)
+                elif kind == "thirdparty_profile_done":
+                    self._on_thirdparty_profile_done(payload)
                 elif kind == "asset_calendar_done":
                     self._high_value_items = core.recent_high_value_items()
                     if self.active_section == "overview":
@@ -5232,6 +6426,34 @@ class TrackerApp:
                                 self._populate_player_profile(win, player_id, name, matches)
                         except tk.TclError:
                             pass
+                elif kind == "alert_item_search_done":
+                    seq, query, items = payload
+                    self._on_alert_item_search_done(seq, query, items)
+                elif kind == "alert_item_price_done":
+                    item_id, info = payload
+                    self._on_alert_item_price_done(item_id, info)
+                elif kind == "price_alert_poll_done":
+                    self._alert_poll_running = False
+                    self._apply_price_results(payload)
+                elif kind == "player_search_done":
+                    searched_name, result = payload
+                    if hasattr(self, "lookup_results_card"):
+                        self._render_lookup_result(searched_name, result)
+                elif kind == "overlay_search_done":
+                    searched_name, status, result = payload
+                    try:
+                        if status == "not_configured":
+                            self.search_overlay.show_error(
+                                "Player Lookup isn't set up - add a "
+                                "deltaforceapi.com key in Settings > "
+                                "delta_force_config.py.")
+                        elif result is None:
+                            self.search_overlay.show_error(
+                                f"No player found for \"{searched_name}\".")
+                        else:
+                            self.search_overlay.show_result(result)
+                    except Exception:
+                        pass
                 elif kind == "community_auto_sync_done":
                     if self.active_section == "community":
                         self.start_community_leaderboard_fetch()
@@ -5392,6 +6614,36 @@ class TrackerApp:
     def _stop_hotkey_listener(self):
         self.hotkey_listener.stop()
 
+    def _toggle_search_overlay(self):
+        try:
+            self.search_overlay.toggle(on_submit=self._on_overlay_search_submit)
+        except Exception:
+            pass  # same convention as _toggle_overlay - never worth a crash
+
+    def _on_overlay_search_submit(self, name: str):
+        try:
+            self.search_overlay.show_searching(name)
+        except Exception:
+            return
+        threading.Thread(target=self._overlay_search_worker,
+                         args=(name,), daemon=True).start()
+
+    def _overlay_search_worker(self, name: str):
+        if not thirdparty_mod.is_configured():
+            self.msg_queue.put(("overlay_search_done",
+                               (name, "not_configured", None)))
+            return
+        result = thirdparty_mod.search_player(name)
+        self.msg_queue.put(("overlay_search_done", (name, "ok", result)))
+
+    def _start_search_hotkey_listener(self):
+        mods, vk, _label = overlay_mod.resolve_hotkey(
+            self.settings, prefix="search", default_label="Ctrl+Shift+O")
+        self.search_hotkey_listener.start(mods, vk)
+
+    def _stop_search_hotkey_listener(self):
+        self.search_hotkey_listener.stop()
+
     def _on_window_minimized(self, event):
         if event.widget is not self.root:
             return
@@ -5439,11 +6691,19 @@ class TrackerApp:
         except Exception:
             pass
         try:
+            self.search_hotkey_listener.stop()
+        except Exception:
+            pass
+        try:
             self.tray_icon.stop()
         except Exception:
             pass
         try:
             self.overlay.hide()
+        except Exception:
+            pass
+        try:
+            self.search_overlay.hide()
         except Exception:
             pass
         try:
