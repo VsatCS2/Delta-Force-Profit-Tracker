@@ -12,12 +12,12 @@
 -->
 
 <title>Delta Force Profit Tracker: track credits per match, map and operator</title>
-<meta name="description" content="DF Tracker is a Windows app for Delta Force that tracks your profit per match, shows your best maps and operators, and looks up any player's stats and stash value by name.">
+<meta name="description" content="DF Tracker for Delta Force: track profit by match, map and operator, use hotkey overlays for your profit and player lookups, and get price alerts.">
 <link rel="canonical" href="https://vsatcs2.github.io/Delta-Force-Profit-Tracker/">
 
 <meta property="og:type" content="website">
 <meta property="og:title" content="Delta Force Profit Tracker">
-<meta property="og:description" content="Track what every Delta Force match actually pays. Profit per match, best maps and operators, and instant player lookup.">
+<meta property="og:description" content="Track what every Delta Force match actually pays. Profit by map and operator, in-game overlays, player lookup, and price alerts.">
 <meta property="og:url" content="https://vsatcs2.github.io/Delta-Force-Profit-Tracker/">
 <meta name="twitter:card" content="summary">
 <meta name="theme-color" content="#0d1829">
@@ -37,9 +37,22 @@
   "applicationCategory": "GameApplication",
   "operatingSystem": "Windows 10, Windows 11",
   "softwareVersion": "1.5.0",
-  "description": "A Windows app for Delta Force that tracks profit per match, shows your best maps and operators, and looks up any player's stats and stash value by name.",
+  "description": "A Windows app for Delta Force that tracks profit per match, map and operator, shows your profit and looks up players with in-game hotkey overlays, and alerts you when an item drops to the price you want to pay.",
   "downloadUrl": "https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest",
-  "url": "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/"
+  "url": "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/",
+  "featureList": [
+    "Profit per match with today, week, month and all-time totals",
+    "Play sessions with a copyable summary",
+    "Weekly highlights and a 7-day trend",
+    "Profit breakdown by map and by operator",
+    "Match history with squad breakdowns",
+    "Profit overlay opened with a hotkey",
+    "Player search overlay with K/D by difficulty and current rank",
+    "Player lookup by name",
+    "Price alerts that notify you when an item drops to the price you want to pay",
+    "Optional community leaderboard",
+    "Automatic updates, system tray, and color themes"
+  ]
 }
 </script>
 <script type="application/ld+json">
@@ -47,16 +60,62 @@
   "@context": "https://schema.org",
   "@type": "FAQPage",
   "mainEntity": [
-    {"@type": "Question", "name": "Does DF Tracker touch the game?",
-     "acceptedAnswer": {"@type": "Answer", "text": "No. It runs as a separate app. It doesn't read the game's memory, inject code, or automate anything in the game, and the overlay is its own window. Your own match data comes from the official Delta Force stats service, while player lookup uses a separate third-party data source."}},
-    {"@type": "Question", "name": "Do I need to sign in?",
-     "acceptedAnswer": {"@type": "Answer", "text": "Yes, to pull your own matches you sign in with your Delta Force (Level Infinite) account. Your password goes only to Level Infinite's login, never to DF Tracker's servers."}},
-    {"@type": "Question", "name": "Where does my data go?",
-     "acceptedAnswer": {"@type": "Answer", "text": "Your match history is stored on your own PC. Joining the community leaderboard is optional."}},
-    {"@type": "Question", "name": "Which versions of Windows are supported?",
-     "acceptedAnswer": {"@type": "Answer", "text": "Windows 10 and Windows 11."}},
-    {"@type": "Question", "name": "Is DF Tracker official?",
-     "acceptedAnswer": {"@type": "Answer", "text": "No. It is an independent fan-made tool and is not affiliated with Level Infinite, Proxima Beta, or the Delta Force developers."}}
+    {
+      "@type": "Question",
+      "name": "Does DF Tracker touch the game?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. It runs as a separate app. It doesn't read the game's memory, inject code, or automate anything in the game, and the overlays are their own windows. Your own match data comes from the official Delta Force stats service. Player lookups and item prices come from separate third-party data sources."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Do I need to sign in?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes, to pull your own matches you sign in with your Delta Force (Level Infinite) account. Your password goes only to Level Infinite's login, never to DF Tracker's servers."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do the overlays work?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Both overlays are off until you turn them on in Settings. The profit overlay opens with Ctrl+Shift+D and the player search overlay with Ctrl+Shift+O, and you can change either hotkey. Like any pop-up window, they can't show over exclusive fullscreen, so play in windowed or borderless mode."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Are price alerts for buying or selling?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Buying. You pick an item and the price you'd like to pay, and DF Tracker notifies you when the item's auction price drops to that price or lower."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Where does my data go?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Your match history is stored on your own PC. Joining the community leaderboard is optional, and leaving removes your stats from the community server."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Which versions of Windows are supported?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Windows 10 and Windows 11."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is DF Tracker official?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. It's an independent fan-made tool and isn't affiliated with Level Infinite, Proxima Beta, or the Delta Force developers."
+      }
+    }
   ]
 }
 </script>
@@ -152,6 +211,34 @@
   .lookup h3 { font: 800 1.9rem/1 var(--display); margin: 0 0 4px; }
   .lookup .lv { color: var(--muted); font-size: .9rem; margin-bottom: 14px; }
 
+  /* overlay + alert mock-ups */
+  .mocks { display: grid; gap: 22px; }
+  .mock { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
+  .mock-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .mock-head b { font: 800 1.15rem/1 var(--display); letter-spacing: .02em; }
+  .mock-head small { color: var(--muted); font-size: .8rem; }
+  .mock .big { font: 800 2.3rem/1 var(--display); color: var(--profit); margin: 2px 0 12px; letter-spacing: .01em; }
+  .mock .sub { color: var(--muted); font-size: .85rem; margin-bottom: 2px; }
+  .mock .kv { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-variant-numeric: tabular-nums; }
+  .mock .kv span:first-child { color: var(--muted); }
+  .mock .kv .up { color: var(--profit); }
+  .mock .kv .down { color: #ff7b72; }
+  .mock hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+  .stats3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; margin: 12px 0; }
+  .stats3 div span { display: block; color: var(--muted); font-size: .72rem; font-weight: 600; }
+  .stats3 div b { font-weight: 600; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+  .stats3 div small { display: block; color: var(--muted); font-size: .72rem; }
+  .toast { border-left: 4px solid var(--credit); }
+  .toast p { margin: 0; color: var(--ink); max-width: none; }
+  .toast .t-sub { color: var(--muted); font-size: .85rem; margin-top: 6px; }
+  .also { list-style: none; margin: 0; padding: 0; columns: 2; column-gap: 48px; }
+  .also li { break-inside: avoid; padding: 11px 0; border-top: 1px solid var(--line); color: var(--muted); }
+  .also li b { color: var(--ink); font-weight: 500; }
+  .sublead { color: var(--muted); margin: 0 0 18px; max-width: 40em; }
+  .split p b { color: var(--ink); font-weight: 500; }
+  .split p { margin: 0 0 14px; }
+  section.tight { padding-top: 64px; }
+
   /* steps: this one really is a sequence */
   .steps { list-style: none; counter-reset: s; margin: 0 0 40px; padding: 0; display: grid;
            grid-template-columns: repeat(3, 1fr); gap: 28px; }
@@ -193,6 +280,7 @@
     .hero { padding-top: 24px; }
     .features li { grid-template-columns: 1fr; gap: 6px; }
     .steps { grid-template-columns: 1fr; }
+    .also { columns: 1; }
     section { padding: 64px 0; }
   }
   @media (max-width: 480px) {
@@ -218,7 +306,7 @@
     <div class="hero">
       <div>
         <h1>Track what every Delta Force match actually pays.</h1>
-        <p class="lead">DF Tracker is a Windows app that adds up your credits for every match, then breaks them down by map and operator, so you can see where your profit really comes from. Look up any teammate or opponent by name while you play.</p>
+        <p class="lead">DF Tracker is a Windows app that adds up your credits for every match and shows where your profit really comes from, by map and by operator. Press a hotkey to see your profit or look up a player without leaving the game, and get an alert when an item you want drops to your price.</p>
         <div class="cta-row">
           <a class="btn btn-primary btn-lg" href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest">Download for Windows</a>
           <span class="meta">Version 1.5.0. Windows 10 and 11.</span>
@@ -238,58 +326,123 @@
     </div>
 
     <section id="features" aria-labelledby="f-title">
-      <h2 class="section-title" id="f-title">What it does</h2>
-      <p class="section-lead">Everything runs in one window, with a small overlay you can pull up during a match.</p>
+      <h2 class="section-title" id="f-title">Your profit, in detail</h2>
+      <p class="section-lead">Everything DF Tracker records about your matches, in one window.</p>
       <ul class="features">
         <li>
-          <h3>Profit per match</h3>
-          <p>Every match is logged with the credits it earned. See your wins and losses, win rate, and <b>average profit per match</b> at a glance, and refresh today's matches with one click.</p>
+          <h3>Overview</h3>
+          <p>See what you've made <b>today, this week, this month, and all time</b>, with daily, weekly and monthly breakdowns. Your best raid and your most recent high-value items sit right below.</p>
         </li>
         <li>
-          <h3>Best maps and operators</h3>
-          <p>Find out which map and which operator make you the most credits, then open either one to see the matches behind the number.</p>
+          <h3>Play sessions</h3>
+          <p>Start a session to track a block of play on its own, separate from calendar days, so a late night isn't split between yesterday and today. When you're done, copy a short summary of your net, matches, win rate and best raid to the clipboard.</p>
         </li>
         <li>
-          <h3>Match history and weekly report</h3>
-          <p>Browse your past matches, sync the ones you missed, and check a weekly report of how your profit is trending.</p>
+          <h3>Weekly highlights</h3>
+          <p>Your evac rate and K/D for the week, your best and worst squad-mates by the value you extracted or lost together, your 7-day net worth, your most valuable items, and your best raid of the week, with a 7-day trend chart.</p>
         </li>
         <li>
-          <h3>Player lookup</h3>
-          <p>Type any name to see that player's <b>K/D, extraction rate, accuracy, headshot rate, and stash value</b>. It works for teammates, opponents, or yourself.</p>
+          <h3>Maps and operators</h3>
+          <p>Every map with its matches, wins and losses, and net income. Every operator with the same, plus <b>win rate and average profit per match</b>, so you can see exactly how much each operator has earned you. Sort any column, and double-click an operator to see its matches.</p>
         </li>
         <li>
-          <h3>In-game overlay</h3>
-          <p>Press <b>Ctrl+Shift+O</b> during a match to search a name in a small window on top of the game, then dismiss it and keep playing.</p>
+          <h3>Match history</h3>
+          <p>Browse every match with its result, kills, operator, rank and net income. Search and sort, then open any match for the <b>squad breakdown</b>, kills against operators and bots, and what you carried out. Refresh today's matches in one click, or sync to catch older ones.</p>
         </li>
         <li>
-          <h3>Price alerts</h3>
-          <p>Track market prices for high-value items and set alerts, so you know what your loot is worth before you sell.</p>
-        </li>
-        <li>
-          <h3>Community leaderboard</h3>
-          <p>Compare your profit with other players on the community leaderboard. Joining is optional.</p>
+          <h3>Profile and extended stats</h3>
+          <p>Your game profile, plus extended stats like accuracy, knocks, kills and deaths by difficulty, category scores, and stash value.</p>
         </li>
       </ul>
-      <p class="section-lead" style="margin:28px 0 0">Also included: several color themes and automatic updates.</p>
     </section>
 
-    <section aria-labelledby="l-title">
+    <section id="overlays" aria-labelledby="o-title">
       <div class="split">
         <div>
-          <h2 class="section-title" id="l-title">Know who you're up against</h2>
-          <p>Player lookup gives you a player's combat record and wealth in seconds. Results are cached, so searching the same name again is instant.</p>
-          <p>Your stash value is shown as liquid, fixed, and collection assets, so you can tell a veteran from a fresh account before the match starts.</p>
+          <h2 class="section-title" id="o-title">Check in without leaving the game</h2>
+          <p class="sublead">Two small overlays, each with its own hotkey. Both are off until you turn them on in Settings.</p>
+          <p><b>Profit overlay.</b> Press <b>Ctrl+Shift+D</b> to show your profit or loss for today, or for your current session, along with your best raid and your most recent loot. You can't click it, so it never gets in your way, and the same hotkey hides it.</p>
+          <p><b>Player search overlay.</b> Press <b>Ctrl+Shift+O</b>, type a name, and see that player's K/D overall and on easy, normal and hard, their extraction rate, current rank, and net stash. Results are cached, so searching the same name again is instant.</p>
+          <p>You can change either hotkey. The overlays are Windows only, and like any pop-up window they can't show over exclusive fullscreen, so use windowed or borderless mode. The same lookup is also a full page in the app, with accuracy, knocks, scores and stash value as well.</p>
         </div>
-        <div class="lookup" role="img" aria-label="Example player lookup result with sample numbers">
-          <div class="search"><div>PlayerName</div><span>Search</span></div>
-          <h3>PlayerName</h3>
-          <div class="lv">Sample result</div>
-          <div class="row"><span class="k">K/D ratio</span><span class="rule"></span><span class="v">2.26</span></div>
-          <div class="row"><span class="k">Extraction rate</span><span class="rule"></span><span class="v">53%</span></div>
-          <div class="row"><span class="k">Headshot rate</span><span class="rule"></span><span class="v">57%</span></div>
-          <div class="row"><span class="k">Net stash</span><span class="rule"></span><span class="v up">852,338,299</span></div>
+        <div class="mocks">
+          <div class="mock" role="img" aria-label="Example profit overlay with sample numbers">
+            <div class="mock-head"><b>Profit overlay</b><small>Sample data, Ctrl+Shift+D</small></div>
+            <div class="sub">TODAY</div>
+            <div class="big">+2,431,880</div>
+            <div class="kv"><span>Best raid</span><span class="up">1,205,400 on AZ3 (Normal)</span></div>
+            <hr>
+            <div class="sub">RECENT LOOT</div>
+            <div class="kv"><span>Rare weapon part</span><span class="up">640,000</span></div>
+            <div class="kv"><span>Collectible</span><span class="up">415,500</span></div>
+            <div class="kv"><span>Armor upgrade</span><span class="up">298,000</span></div>
+          </div>
+          <div class="mock" role="img" aria-label="Example player search overlay with sample numbers">
+            <div class="mock-head"><b>Player search overlay</b><small>Sample data, Ctrl+Shift+O</small></div>
+            <div class="kv"><span>PlayerName</span><span>Lv.60 / 50</span></div>
+            <div class="stats3">
+              <div><span>K/D</span><b>2.31</b></div>
+              <div><span>EXTRACT</span><b>54%</b></div>
+              <div><span>RANK</span><b>6,100</b><small>peak 9,400</small></div>
+              <div><span>EASY K/D</span><b class="up" style="color:var(--profit)">3.40</b></div>
+              <div><span>NORMAL K/D</span><b style="color:var(--profit)">1.80</b></div>
+              <div><span>HARD K/D</span><b style="color:#ff7b72">0.90</b></div>
+            </div>
+            <div class="kv"><span>Net stash</span><span class="up">850,000,000 credits</span></div>
+          </div>
         </div>
       </div>
+    </section>
+
+    <section id="alerts" aria-labelledby="a-title">
+      <div class="split">
+        <div>
+          <h2 class="section-title" id="a-title">Know when an item hits the price you want to pay</h2>
+          <p>Pick an item, set the price you'd <b>buy</b> it at, and DF Tracker notifies you when its auction price drops to that price or lower. You can watch several items at once.</p>
+          <p>It checks every minute while the app is open, even when it's minimized or in the system tray. You get a pop-up and, if you like, a sound. Enter prices as 5,000,000, 5m, or 750k.</p>
+          <p>Prices can trail the live auction house slightly. Each alert shows whether its price has been met or it's still waiting.</p>
+        </div>
+        <div class="mocks">
+          <div class="mock toast" role="img" aria-label="Example price alert notification with sample numbers">
+            <div class="mock-head"><b>Price alert</b><small>Sample data</small></div>
+            <p>Reactor Master is now 4,850,000 credits, at or below your target of 5,000,000.</p>
+          </div>
+          <div class="mock" role="img" aria-label="Example list of price alerts with sample numbers">
+            <div class="mock-head"><b>Your alerts</b><small>Sample data</small></div>
+            <div class="kv"><span>Reactor Master, target 5,000,000</span><span class="up">Price met</span></div>
+            <div class="kv"><span>Rare weapon part, target 600,000</span><span>Waiting for a price</span></div>
+            <div class="kv"><span>Collectible, target 300,000</span><span>Waiting for a price</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="community" aria-labelledby="c-title">
+      <h2 class="section-title" id="c-title">Compare with other players</h2>
+      <p class="section-lead">Optional. Join the community leaderboard with your Delta Force login.</p>
+      <ul class="features">
+        <li>
+          <h3>Community leaderboard</h3>
+          <p>See where you rank on the <b>Today</b> and <b>All-Time</b> boards: net income, matches, win rate, best map, and best operator. Click a player to see their recent matches.</p>
+        </li>
+        <li>
+          <h3>You choose what's shared</h3>
+          <p>Joining is optional. It shares your Overview totals and your recent matches (up to your last 200) under your in-game nickname. Leave at any time, and your stats are removed from the community server.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section id="more" aria-labelledby="m-title">
+      <h2 class="section-title" id="m-title">Also included</h2>
+      <p class="section-lead">The small things that make it easy to leave running.</p>
+      <ul class="also">
+        <li><b>Auto-refresh</b> on a timer you choose, with an optional pop-up when new matches arrive</li>
+        <li><b>System tray</b> support: minimize to the tray, start with Windows, or start minimized</li>
+        <li><b>Automatic updates</b> that download in the background and install when you choose Restart and Update</li>
+        <li><b>CSV export</b> of your match history</li>
+        <li><b>Discord Rich Presence</b> showing today's profit and win-loss on your Discord profile</li>
+        <li><b>Seven color themes</b>, including a soft light one, and your own picture for the banner</li>
+      </ul>
     </section>
 
     <section id="download" aria-labelledby="d-title">
@@ -309,15 +462,23 @@
       <p class="section-lead">The short answers.</p>
       <details>
         <summary>Does DF Tracker touch the game?</summary>
-        <p>No. It runs as a separate app. It doesn't read the game's memory, inject code, or automate anything in the game, and the overlay is its own window. Your own match data comes from the official Delta Force stats service, while player lookup uses a separate third-party data source.</p>
+        <p>No. It runs as a separate app. It doesn't read the game's memory, inject code, or automate anything in the game, and the overlays are their own windows. Your own match data comes from the official Delta Force stats service. Player lookups and item prices come from separate third-party data sources.</p>
       </details>
       <details>
         <summary>Do I need to sign in?</summary>
         <p>Yes, to pull your own matches you sign in with your Delta Force (Level Infinite) account. Your password goes only to Level Infinite's login, never to DF Tracker's servers.</p>
       </details>
       <details>
+        <summary>How do the overlays work?</summary>
+        <p>Both overlays are off until you turn them on in Settings. The profit overlay opens with Ctrl+Shift+D and the player search overlay with Ctrl+Shift+O, and you can change either hotkey. Like any pop-up window, they can't show over exclusive fullscreen, so play in windowed or borderless mode.</p>
+      </details>
+      <details>
+        <summary>Are price alerts for buying or selling?</summary>
+        <p>Buying. You pick an item and the price you'd like to pay, and DF Tracker notifies you when the item's auction price drops to that price or lower.</p>
+      </details>
+      <details>
         <summary>Where does my data go?</summary>
-        <p>Your match history is stored on your own PC. Joining the community leaderboard is optional.</p>
+        <p>Your match history is stored on your own PC. Joining the community leaderboard is optional, and leaving removes your stats from the community server.</p>
       </details>
       <details>
         <summary>Which versions of Windows are supported?</summary>
