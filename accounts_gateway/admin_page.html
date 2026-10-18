@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>DF Tracker admin</title>
+<style>
+  :root { --bg:#0b1424; --panel:#142239; --alt:#1b2d4a; --line:#2b4166; --ink:#e8eef9; --muted:#9aaccc;
+          --accent:#4fd196; --warn:#f5b94a; --bad:#ff6b7a; --pro:#a281ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 "Segoe UI",system-ui,sans-serif; }
+  header { display:flex; gap:16px; align-items:center; padding:14px 24px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  header h1 { margin:0; font-size:18px; font-weight:600; }
+  header .spacer { flex:1; }
+  main { padding:20px 24px 60px; max-width:1200px; margin:0 auto; }
+  nav { display:flex; gap:4px; margin-bottom:18px; }
+  nav button { background:none; border:1px solid transparent; color:var(--muted); padding:8px 16px; border-radius:8px; cursor:pointer; font:inherit; }
+  nav button.on { background:var(--alt); color:var(--ink); border-color:var(--line); }
+  input, select, textarea, button { font:inherit; color:var(--ink); background:var(--alt); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  button { cursor:pointer; }
+  button.primary { background:var(--accent); color:#06231a; border-color:transparent; font-weight:600; }
+  button.danger { background:transparent; color:var(--bad); border-color:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  .bar { display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center; }
+  .bar input[type=search] { min-width:260px; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { padding:9px 12px; text-align:left; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  tr:last-child td { border-bottom:0; }
+  tbody tr:hover { background:rgba(255,255,255,.03); }
+  .who { display:flex; gap:10px; align-items:center; min-width:0; }
+  .who img, .who .ph { width:30px; height:30px; border-radius:50%; flex:none; background:var(--alt); }
+  .who div { min-width:0; } .who b { display:block; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .who small, .muted { color:var(--muted); }
+  .pill { display:inline-block; padding:1px 9px; border-radius:99px; font-size:12px; border:1px solid var(--line); }
+  .pill.pro { color:var(--pro); border-color:var(--pro); } .pill.admin { color:var(--warn); border-color:var(--warn); }
+  .pill.banned { color:var(--bad); border-color:var(--bad); } .pill.free { color:var(--muted); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:22px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card b { display:block; font-size:26px; } .card span { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  h2 { font-size:15px; margin:22px 0 10px; }
+  .pager { display:flex; gap:10px; align-items:center; margin-top:12px; color:var(--muted); }
+  dialog { background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:14px; padding:22px 24px; width:min(520px,94vw); }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h3 { margin:0 0 4px; } dialog .sub { color:var(--muted); margin-bottom:14px; word-break:break-all; }
+  .field { display:grid; gap:4px; margin-bottom:12px; } .field label { color:var(--muted); font-size:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .actions { display:flex; gap:10px; margin-top:18px; align-items:center; }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--alt); border:1px solid var(--line); padding:10px 18px; border-radius:10px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  .toast.show { opacity:1; } .toast.err { border-color:var(--bad); color:var(--bad); }
+  td input[type=number] { width:90px; } td input[type=text] { width:100%; min-width:120px; }
+  .empty { padding:28px; text-align:center; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>DF Tracker admin</h1>
+  <span class="muted" id="env"></span>
+  <span class="spacer"></span>
+  <input type="password" id="token" placeholder="Admin token" autocomplete="off" size="26" aria-label="Admin token">
+  <button class="primary" id="connect">Connect</button>
+</header>
+<main>
+  <nav id="tabs">
+    <button data-tab="users" class="on">Users</button>
+    <button data-tab="features">Features</button>
+    <button data-tab="overview">Overview</button>
+  </nav>
+  <section id="tab-users">
+    <div class="bar">
+      <input type="search" id="q" placeholder="Search name, email or user id" aria-label="Search users">
+      <select id="tierFilter" aria-label="Filter by tier"><option value="">All tiers</option><option>free</option><option>pro</option></select>
+      <span class="muted" id="count"></span>
+    </div>
+    <table><thead><tr><th>User</th><th>Plan</th><th>Status</th><th>Joined</th><th>Last seen</th><th>Lookups today</th><th></th></tr></thead><tbody id="usersBody"></tbody></table>
+    <div class="pager"><button id="prev">Previous</button><span id="page"></span><button id="next">Next</button></div>
+  </section>
+  <section id="tab-features" hidden>
+    <p class="muted">Decide which plan unlocks each feature. Changes apply within about 30 seconds and need no app update. Limits are per day; leave blank for unlimited.</p>
+    <table><thead><tr><th>Feature</th><th>Needs plan</th><th>On</th><th>Free limit</th><th>Pro limit</th><th>Description</th><th></th></tr></thead><tbody id="featBody"></tbody></table>
+    <h2>Add a feature</h2>
+    <div class="row"><input type="text" id="newKey" placeholder="key_like_this" size="18" aria-label="New feature key"><input type="text" id="newLabel" placeholder="Label" size="18" aria-label="New feature label"><button id="addFeat">Add</button></div>
+    <p class="muted">A new key only takes effect once the app or server checks for it, so add the key here first, then ship the code that uses it.</p>
+  </section>
+  <section id="tab-overview" hidden>
+    <div class="cards" id="cards"></div>
+    <h2>Usage today</h2><div id="usage" class="muted"></div>
+    <h2>Recent admin actions</h2>
+    <table><thead><tr><th>When</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody id="auditBody"></tbody></table>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <h3 id="dName"></h3><div class="sub" id="dSub"></div>
+  <div class="field"><label for="dTier">Plan</label>
+    <select id="dTier"><option>free</option><option>pro</option></select></div>
+  <div class="field"><label for="dExp">Paid plan ends (optional - they drop back to free automatically)</label>
+    <div class="row"><input type="datetime-local" id="dExp">
+      <button type="button" data-days="7">+7 days</button><button type="button" data-days="30">+30 days</button>
+      <button type="button" data-days="365">+1 year</button><button type="button" id="dExpClear">No end date</button></div></div>
+  <div class="field"><label for="dRole">Role</label><select id="dRole"><option>user</option><option>admin</option></select></div>
+  <div class="field"><label><input type="checkbox" id="dBan"> Suspended (blocked from all online features)</label>
+    <input type="text" id="dBanReason" placeholder="Reason (shown to the user)" maxlength="200" aria-label="Suspension reason"></div>
+  <div class="field"><label for="dNotes">Private notes</label><textarea id="dNotes" rows="3" maxlength="500"></textarea></div>
+  <div class="actions"><button class="primary" id="dSave">Save</button><button id="dCancel">Cancel</button>
+    <span style="flex:1"></span><button class="danger" id="dDelete">Delete account</button></div>
+</dialog>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  // All dynamic data goes through textContent / attributes (never innerHTML),
+  // so a hostile display name or note can't inject markup.
+  const el = (tag, props = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(props)) {
+      if (k === 'class') n.className = v;
+      else if (k === 'on') for (const [e, f] of Object.entries(v)) n.addEventListener(e, f);
+      else if (k === 'value') n.value = v;
+      else if (k === 'checked') n.checked = !!v;
+      else if (k === 'selected') n.selected = !!v;
+      else if (v !== undefined && v !== null && v !== false) n.setAttribute(k, v === true ? '' : v);
+    }
+    for (const kid of kids.flat()) n.append(kid instanceof Node ? kid : document.createTextNode(kid ?? ''));
+    return n;
+  };
+  const state = { offset: 0, limit: 25, total: 0, editing: null, token: sessionStorage.getItem('dfa') || '' };
+  $('token').value = state.token;
+
+  function toast(msg, err) { const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (err ? ' err' : ''); clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 3200); }
+  async function api(method, path, body) {
+    const r = await fetch('/admin/api' + path, { method, headers: { 'Authorization': 'Bearer ' + state.token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    let data = {}; try { data = await r.json(); } catch (e) {}
+    if (!r.ok) { const m = r.status === 401 ? 'Wrong admin token' : r.status === 429 ? 'Too many attempts - wait a few minutes' : (data.detail || data.error || ('Error ' + r.status)); throw new Error(m); }
+    return data;
+  }
+  const fmtDate = (s) => s ? new Date(s).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '-';
+  const ago = (s) => { if (!s) return 'never'; const m = (Date.now() - new Date(s)) / 60000; return m < 2 ? 'just now' : m < 120 ? Math.round(m) + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; };
+
+  // ---------------------------------------------------------------- users
+  async function loadUsers() {
+    try {
+      const q = new URLSearchParams({ q: $('q').value.trim(), tier: $('tierFilter').value, offset: state.offset, limit: state.limit });
+      const d = await api('GET', '/users?' + q);
+      state.total = d.total;
+      const body = $('usersBody'); body.replaceChildren();
+      if (!d.users.length) body.append(el('tr', {}, el('td', { colspan: 7, class: 'empty' }, 'No users found.')));
+      for (const u of d.users) {
+        const img = /^https:\/\//.test(u.avatar_url || '') ? el('img', { src: u.avatar_url, alt: '', referrerpolicy: 'no-referrer' }) : el('div', { class: 'ph' });
+        const plan = [el('span', { class: 'pill ' + (u.effective_tier === 'pro' ? 'pro' : 'free') }, u.effective_tier)];
+        if (u.role === 'admin' && u.effective_tier === 'pro' && u.tier !== 'pro') plan.push(' ', el('span', { class: 'muted' }, '(via admin role)'));
+        else if (u.tier !== u.effective_tier) plan.push(' ', el('span', { class: 'muted' }, '(' + u.tier + ' expired)'));
+        else if (u.tier === 'pro' && u.tier_expires_at) plan.push(' ', el('small', { class: 'muted' }, 'until ' + fmtDate(u.tier_expires_at)));
+        const status = [];
+        if (u.banned) status.push(el('span', { class: 'pill banned' }, 'suspended'));
+        if (u.role === 'admin') status.push(el('span', { class: 'pill admin' }, 'admin'));
+        if (!status.length) status.push(el('span', { class: 'muted' }, 'active'));
+        body.append(el('tr', {},
+          el('td', {}, el('div', { class: 'who' }, img, el('div', {}, el('b', {}, u.display_name || '(no name)'), el('small', {}, u.email || u.id)))),
+          el('td', {}, plan), el('td', {}, status), el('td', {}, fmtDate(u.created_at)), el('td', {}, ago(u.last_seen_at)),
+          el('td', {}, String((u.usage_today || {}).player_lookup || 0)),
+          el('td', {}, el('button', { on: { click: () => openEditor(u) } }, 'Edit'))));
+      }
+      const from = d.total ? state.offset + 1 : 0, to = Math.min(state.offset + state.limit, d.total);
+      $('count').textContent = d.total + ' user' + (d.total === 1 ? '' : 's');
+      $('page').textContent = from + '-' + to + ' of ' + d.total;
+      $('prev').disabled = state.offset === 0; $('next').disabled = to >= d.total;
+    } catch (e) { toast(e.message, true); }
+  }
+  const toLocalInput = (iso) => { if (!iso) return ''; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+  function openEditor(u) {
+    state.editing = u; $('dName').textContent = u.display_name || '(no name)';
+    $('dSub').textContent = (u.email || '') + '  ' + u.id;
+    $('dTier').value = u.tier; $('dExp').value = toLocalInput(u.tier_expires_at); $('dRole').value = u.role;
+    $('dBan').checked = !!u.banned; $('dBanReason').value = u.ban_reason || ''; $('dNotes').value = u.notes || '';
+    $('dlg').showModal();
+  }
+  $('dlg').addEventListener('click', (e) => { if (e.target.dataset && e.target.dataset.days) { const d = new Date(); d.setDate(d.getDate() + Number(e.target.dataset.days)); $('dExp').value = toLocalInput(d.toISOString()); $('dTier').value = 'pro'; } });
+  $('dExpClear').onclick = () => { $('dExp').value = ''; };
+  $('dCancel').onclick = () => $('dlg').close();
+  $('dSave').onclick = async () => {
+    const u = state.editing, exp = $('dExp').value;
+    try {
+      await api('PATCH', '/users/' + encodeURIComponent(u.id), {
+        tier: $('dTier').value, tier_expires_at: exp ? new Date(exp).toISOString() : null, role: $('dRole').value,
+        banned: $('dBan').checked, ban_reason: $('dBan').checked ? $('dBanReason').value : null, notes: $('dNotes').value });
+      $('dlg').close(); toast('Saved'); loadUsers();
+    } catch (e) { toast(e.message, true); }
+  };
+  $('dDelete').onclick = async () => {
+    const u = state.editing;
+    if (!confirm('Permanently delete ' + (u.email || u.id) + '? This removes their account and cannot be undone.')) return;
+    try { await api('DELETE', '/users/' + encodeURIComponent(u.id)); $('dlg').close(); toast('Account deleted'); loadUsers(); }
+    catch (e) { toast(e.message, true); }
+  };
+  let timer; $('q').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { state.offset = 0; loadUsers(); }, 300); });
+  $('tierFilter').onchange = () => { state.offset = 0; loadUsers(); };
+  $('prev').onclick = () => { state.offset = Math.max(0, state.offset - state.limit); loadUsers(); };
+  $('next').onclick = () => { state.offset += state.limit; loadUsers(); };
+
+  // ------------------------------------------------------------- features
+  async function loadFeatures() {
+    try {
+      const d = await api('GET', '/features'); const body = $('featBody'); body.replaceChildren();
+      for (const f of d.features) {
+        const label = el('input', { type: 'text', value: f.label, 'aria-label': 'Label for ' + f.key });
+        const tier = el('select', { 'aria-label': 'Plan needed for ' + f.key }, d.tiers.map(t => el('option', { value: t, selected: t === f.min_tier }, t)));
+        const on = el('input', { type: 'checkbox', checked: f.enabled, 'aria-label': f.key + ' enabled' });
+        const fl = el('input', { type: 'number', min: 0, value: f.free_limit ?? '', placeholder: 'unlimited', 'aria-label': f.key + ' free limit' });
+        const pl = el('input', { type: 'number', min: 0, value: f.pro_limit ?? '', placeholder: 'unlimited', 'aria-label': f.key + ' pro limit' });
+        const desc = el('input', { type: 'text', value: f.description || '', 'aria-label': f.key + ' description' });
+        body.append(el('tr', {}, el('td', {}, el('b', {}, f.key), el('br'), label), el('td', {}, tier), el('td', {}, on), el('td', {}, fl), el('td', {}, pl), el('td', {}, desc),
+          el('td', {}, el('div', { class: 'row' },
+            el('button', { class: 'primary', on: { click: async () => {
+              try { await api('PUT', '/features/' + f.key, { label: label.value, description: desc.value, min_tier: tier.value, enabled: on.checked, free_limit: fl.value, pro_limit: pl.value, sort: f.sort }); toast('Saved ' + f.key); }
+              catch (e) { toast(e.message, true); } } } }, 'Save'),
+            el('button', { class: 'danger', on: { click: async () => { if (!confirm('Delete feature ' + f.key + '?')) return; try { await api('DELETE', '/features/' + f.key); loadFeatures(); } catch (e) { toast(e.message, true); } } } }, 'Delete')))));
+      }
+    } catch (e) { toast(e.message, true); }
+  }
+  $('addFeat').onclick = async () => {
+    const key = $('newKey').value.trim();
+    try { await api('PUT', '/features/' + encodeURIComponent(key), { label: $('newLabel').value || key, min_tier: 'free', enabled: true }); $('newKey').value = $('newLabel').value = ''; loadFeatures(); toast('Added'); }
+    catch (e) { toast(e.message, true); }
+  };
+
+  // ------------------------------------------------------------- overview
+  async function loadOverview() {
+    try {
+      const s = await api('GET', '/stats'), a = await api('GET', '/audit?limit=50'), c = s.counts;
+      $('cards').replaceChildren(...[['Users', c.users], ['Pro', c.pro], ['Suspended', c.banned], ['New (7 days)', c.signups_7d], ['Active (24 h)', c.active_24h],
+        ['Upstream calls today', s.global_used + (s.global_cap ? ' / ' + s.global_cap : '')]].map(([k, v]) => el('div', { class: 'card' }, el('b', {}, String(v)), el('span', {}, k))));
+      const u = Object.entries(s.usage_today); $('usage').textContent = u.length ? u.map(([k, v]) => k + ': ' + v).join('   ') : 'No usage recorded yet today.';
+      $('env').textContent = 'store: ' + s.store + '  auth: ' + s.auth;
+      const body = $('auditBody'); body.replaceChildren();
+      if (!a.audit.length) body.append(el('tr', {}, el('td', { colspan: 4, class: 'empty' }, 'Nothing yet.')));
+      for (const r of a.audit) body.append(el('tr', {}, el('td', {}, new Date(r.at).toLocaleString()), el('td', {}, r.action), el('td', { class: 'muted' }, r.target || ''), el('td', { class: 'muted' }, JSON.stringify(r.detail || {}))));
+    } catch (e) { toast(e.message, true); }
+  }
+
+  // ---------------------------------------------------------------- shell
+  const loaders = { users: loadUsers, features: loadFeatures, overview: loadOverview };
+  function show(tab) {
+    for (const b of $('tabs').children) b.classList.toggle('on', b.dataset.tab === tab);
+    for (const t of Object.keys(loaders)) $('tab-' + t).hidden = t !== tab;
+    if (state.token) loaders[tab]();
+  }
+  $('tabs').addEventListener('click', (e) => { if (e.target.dataset.tab) show(e.target.dataset.tab); });
+  $('connect').onclick = () => { state.token = $('token').value.trim(); sessionStorage.setItem('dfa', state.token); show(document.querySelector('#tabs .on').dataset.tab); };
+  $('token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('connect').click(); });
+  if (state.token) show('users'); else toast('Enter your admin token to begin');
+})();
+</script>
+</body>
+</html>
