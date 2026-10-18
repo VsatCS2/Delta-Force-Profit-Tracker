@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://vsatcs2.github.io/Delta-Force-Profit-Tracker/sitemap.xml
