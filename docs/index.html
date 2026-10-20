@@ -73,7 +73,23 @@
       "name": "Do I need to sign in?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Yes, to pull your own matches you sign in with your Delta Force (Level Infinite) account. Your password goes only to Level Infinite's login, never to DF Tracker's servers."
+        "text": "There are two separate sign-ins, and only the first is needed to track your own matches. Your game account: sign in with your Delta Force (Level Infinite) account so DF Tracker can pull your matches. Your password goes only to Level Infinite's login, never to DF Tracker's servers. A DF Tracker account (optional): sign in with Discord to use player lookup and the player search overlay."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is a DF Tracker account?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "It's a free account you create by signing in with Discord. It lets our server know who is looking up players, so lookups can be limited fairly per person. It is separate from your game account, and DF Tracker only uses Discord to confirm who you are."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What do you store about me?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "For a DF Tracker account: your Discord ID, email address, display name and avatar link as Discord provides them, your plan, how many lookups you've used each day, and when you last used the app. If you join the community leaderboard: your Overview totals and recent matches under your in-game nickname. Your own match history stays on your PC. The privacy page has the full details."
       }
     },
     {
@@ -81,7 +97,7 @@
       "name": "How do the overlays work?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Both overlays are off until you turn them on in Settings. The profit overlay opens with Ctrl+Shift+D and the player search overlay with Ctrl+Shift+O, and you can change either hotkey. Like any pop-up window, they can't show over exclusive fullscreen, so play in windowed or borderless mode."
+        "text": "Both overlays are off until you turn them on in Settings. The profit overlay opens with Ctrl+Shift+D and the player search overlay with Ctrl+Shift+O, and you can change either hotkey. The search overlay needs your DF Tracker account. Like any pop-up window, the overlays can't show over exclusive fullscreen, so play in windowed or borderless mode."
       }
     },
     {
@@ -94,10 +110,10 @@
     },
     {
       "@type": "Question",
-      "name": "Where does my data go?",
+      "name": "Can I delete my account and data?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Your match history is stored on your own PC. Joining the community leaderboard is optional, and leaving removes your stats from the community server."
+        "text": "Yes. Contact us from the privacy page and we'll delete your DF Tracker account and the data attached to it. Leaving the community leaderboard also removes your stats from it."
       }
     },
     {
@@ -362,7 +378,7 @@
           <h2 class="section-title" id="o-title">Check in without leaving the game</h2>
           <p class="sublead">Two small overlays, each with its own hotkey. Both are off until you turn them on in Settings.</p>
           <p><b>Profit overlay.</b> Press <b>Ctrl+Shift+D</b> to show your profit or loss for today, or for your current session, along with your best raid and your most recent loot. You can't click it, so it never gets in your way, and the same hotkey hides it.</p>
-          <p><b>Player search overlay.</b> Press <b>Ctrl+Shift+O</b>, type a name, and see that player's K/D overall and on easy, normal and hard, their extraction rate, current rank, and net stash. Results are cached, so searching the same name again is instant.</p>
+          <p><b>Player search overlay.</b> Press <b>Ctrl+Shift+O</b>, type a name, and see that player's K/D overall and on easy, normal and hard, their extraction rate, current rank, and net stash. Results are cached, so searching the same name again is instant. It uses your free DF Tracker account: sign in with Discord in Settings first.</p>
           <p>You can change either hotkey. The overlays are Windows only, and like any pop-up window they can't show over exclusive fullscreen, so use windowed or borderless mode. The same lookup is also a full page in the app, with accuracy, knocks, scores and stash value as well.</p>
         </div>
         <div class="mocks">
@@ -451,7 +467,7 @@
       <ol class="steps">
         <li><b>Download</b><span>Grab the latest Windows build from the releases page.</span></li>
         <li><b>Run it</b><span>Open the app. Windows 10 or 11 is all you need.</span></li>
-        <li><b>Sign in</b><span>Use your Delta Force account, and your matches load in.</span></li>
+        <li><b>Sign in</b><span>Use your Delta Force account and your matches load in. Sign in with Discord too if you want player lookup.</span></li>
       </ol>
       <a class="btn btn-primary btn-lg" href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest">Download for Windows</a>
       <p class="meta" style="margin-top:14px">Version 1.5.0</p>
@@ -466,19 +482,27 @@
       </details>
       <details>
         <summary>Do I need to sign in?</summary>
-        <p>Yes, to pull your own matches you sign in with your Delta Force (Level Infinite) account. Your password goes only to Level Infinite's login, never to DF Tracker's servers.</p>
+        <p>There are two separate sign-ins, and only the first is needed to track your own matches. Your game account: sign in with your Delta Force (Level Infinite) account so DF Tracker can pull your matches. Your password goes only to Level Infinite's login, never to DF Tracker's servers. A DF Tracker account (optional): sign in with Discord to use player lookup and the player search overlay.</p>
+      </details>
+      <details>
+        <summary>What is a DF Tracker account?</summary>
+        <p>It's a free account you create by signing in with Discord. It lets our server know who is looking up players, so lookups can be limited fairly per person. It is separate from your game account, and DF Tracker only uses Discord to confirm who you are.</p>
+      </details>
+      <details>
+        <summary>What do you store about me?</summary>
+        <p>For a DF Tracker account: your Discord ID, email address, display name and avatar link as Discord provides them, your plan, how many lookups you've used each day, and when you last used the app. If you join the community leaderboard: your Overview totals and recent matches under your in-game nickname. Your own match history stays on your PC. The privacy page has the full details.</p>
       </details>
       <details>
         <summary>How do the overlays work?</summary>
-        <p>Both overlays are off until you turn them on in Settings. The profit overlay opens with Ctrl+Shift+D and the player search overlay with Ctrl+Shift+O, and you can change either hotkey. Like any pop-up window, they can't show over exclusive fullscreen, so play in windowed or borderless mode.</p>
+        <p>Both overlays are off until you turn them on in Settings. The profit overlay opens with Ctrl+Shift+D and the player search overlay with Ctrl+Shift+O, and you can change either hotkey. The search overlay needs your DF Tracker account. Like any pop-up window, the overlays can't show over exclusive fullscreen, so play in windowed or borderless mode.</p>
       </details>
       <details>
         <summary>Are price alerts for buying or selling?</summary>
         <p>Buying. You pick an item and the price you'd like to pay, and DF Tracker notifies you when the item's auction price drops to that price or lower.</p>
       </details>
       <details>
-        <summary>Where does my data go?</summary>
-        <p>Your match history is stored on your own PC. Joining the community leaderboard is optional, and leaving removes your stats from the community server.</p>
+        <summary>Can I delete my account and data?</summary>
+        <p>Yes. Contact us from the privacy page and we'll delete your DF Tracker account and the data attached to it. Leaving the community leaderboard also removes your stats from it.</p>
       </details>
       <details>
         <summary>Which versions of Windows are supported?</summary>
@@ -493,7 +517,7 @@
 
   <footer>
     <p>DF Tracker is an independent fan-made project. It is not affiliated with, endorsed by, or sponsored by Level Infinite, Proxima Beta, or the developers of Delta Force. Delta Force and related names and marks belong to their respective owners.</p>
-    <p><a href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker">Source and releases on GitHub</a></p>
+    <p><a href="privacy.html">Privacy</a> &nbsp;|&nbsp; <a href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker">Releases on GitHub</a> &nbsp;|&nbsp; <a href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/issues">Contact</a></p>
   </footer>
 </div>
 

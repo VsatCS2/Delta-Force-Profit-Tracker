@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- ===== BEFORE PUBLISHING: search this file for "EDIT:" and fill in each one. =====
+  This is a plain-language DRAFT written from what DF Tracker actually stores.
+  It is not legal advice. Have it checked, especially if you have users in the
+  EU/UK, and keep it in step with the app if what you collect changes. -->
+
+<title>Privacy: DF Tracker for Delta Force</title>
+<meta name="description" content="What DF Tracker stores about you, what stays on your PC, who else handles data, and how to ask for your data to be deleted.">
+<link rel="canonical" href="https://vsatcs2.github.io/Delta-Force-Profit-Tracker/privacy.html">
+<meta name="theme-color" content="#0d1829">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1829'/%3E%3Cpath d='M16 5l9 11-9 11-9-11z' fill='none' stroke='%2358d08e' stroke-width='3' stroke-linejoin='round'/%3E%3Ccircle cx='16' cy='16' r='2.6' fill='%2358d08e'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@800;900&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root { --bg:#0d1829; --panel:#142238; --line:#25384f; --ink:#e9eef6; --muted:#97a9c0; --credit:#f0b84a; --profit:#58d08e;
+          --display:"Big Shoulders Display", Impact, "Arial Narrow", sans-serif;
+          --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:400 1.0625rem/1.65 var(--body); -webkit-font-smoothing:antialiased; }
+  a { color:var(--credit); }
+  :focus-visible { outline:3px solid var(--credit); outline-offset:3px; border-radius:4px; }
+  .wrap { width:min(760px, 100% - 48px); margin-inline:auto; }
+  header { padding:22px 0; }
+  .brand { display:inline-flex; align-items:center; gap:12px; text-decoration:none; color:var(--ink); font:800 1.5rem/1 var(--display); letter-spacing:.02em; }
+  .brand svg { width:28px; height:28px; }
+  h1 { font:900 clamp(2.4rem,6vw,3.6rem)/1 var(--display); margin:28px 0 10px; }
+  .updated { color:var(--muted); margin:0 0 36px; }
+  h2 { font:800 1.7rem/1.1 var(--display); letter-spacing:.01em; margin:44px 0 10px; }
+  p, li { max-width:42em; }
+  p { margin:0 0 14px; }
+  ul { padding-left:1.2em; margin:0 0 14px; } li { margin-bottom:6px; }
+  .note { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 20px; margin:0 0 14px; }
+  .muted { color:var(--muted); }
+  table { width:100%; border-collapse:collapse; margin:6px 0 16px; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:.9rem; width:34%; } tr:last-child th, tr:last-child td { border-bottom:0; }
+  footer { border-top:1px solid var(--line); margin-top:56px; padding:32px 0 56px; color:var(--muted); font-size:.9rem; }
+  @media (max-width:560px) { th, td { display:block; width:100%; } th { padding-bottom:0; border-bottom:0; } }
+</style>
+</head>
+
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="index.html" aria-label="DF Tracker, home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4l10 12-10 12L6 16z" fill="none" stroke="#58d08e" stroke-width="3" stroke-linejoin="round"/><circle cx="16" cy="16" r="2.8" fill="#58d08e"/></svg>
+      DF Tracker
+    </a>
+  </header>
+
+  <main>
+    <h1>Privacy</h1>
+    <p class="updated">Last updated: October 2026</p>
+
+    <div class="note">
+      <p><b>The short version.</b> Your match history stays on your PC. We never see your game password. If you create a DF Tracker account (optional), we store the basics Discord gives us plus how many lookups you've used. You can ask us to delete all of it.</p>
+    </div>
+
+    <h2>Who we are</h2>
+    <p>DF Tracker is an independent, fan-made project run by <!-- EDIT: your name or project name -->YOUR NAME. It is not affiliated with Level Infinite, Proxima Beta, or the developers of Delta Force. To ask a question or make a request about your data, <a href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/issues">contact us here</a><!-- EDIT: add an email address or Discord server link if you want one -->.</p>
+
+    <h2>What stays on your PC</h2>
+    <ul>
+      <li>Your match history, settings, and caches.</li>
+      <li>Your game-login session and your DF Tracker sign-in session, saved in the app's data folder. The DF Tracker session is encrypted with your Windows account. The game-login session is a login token (not your password) and is stored as a file, so don't share that folder.</li>
+    </ul>
+    <p>We don't receive any of this.</p>
+
+    <h2>Your game login</h2>
+    <p>You sign in to your Delta Force account with Level Infinite. Your game password goes only to Level Infinite. DF Tracker never sends it to any server we run, and we never see or store it.</p>
+
+    <h2>Your DF Tracker account (optional)</h2>
+    <p>You can sign in with Discord to use online features such as player lookup. Tracking your own matches works without an account. When you sign in, we store:</p>
+    <table>
+      <tr><th>From Discord</th><td>Your Discord user ID, email address, display name, and avatar link.</td></tr>
+      <tr><th>Our own records</th><td>Your plan, any suspension or admin notes about your account, how many lookup requests you've used each day, and when your account was created and last used.</td></tr>
+    </table>
+    <p>We use this to sign you in, to limit lookups fairly between people, to prevent abuse, and to manage your plan if you have one. DF Tracker only uses Discord to confirm who you are. It does not post to Discord or read your messages.</p>
+
+    <h2>Player lookups</h2>
+    <p>The names or IDs you search for are sent to our server, which passes them to a third-party data provider (through RapidAPI) to fetch the stats. Results are kept in memory for a short time so repeat searches are fast. We don't keep a history of what you searched. We do count the requests your account makes each day. The data provider may keep its own logs.</p>
+
+    <h2>Community leaderboard (optional)</h2>
+    <p>If you join, we store your Overview totals and your recent matches (up to your last 200) under your in-game nickname. Other users can see them. You can leave at any time from the app, which removes your stats from the community server.</p>
+
+    <h2>Who else handles data</h2>
+    <table>
+      <tr><th>Supabase</th><td>Stores DF Tracker accounts and handles sign-in.</td></tr>
+      <tr><th>Discord</th><td>Confirms who you are when you sign in.</td></tr>
+      <tr><th>Railway</th><td>Hosts our servers.</td></tr>
+      <tr><th>RapidAPI and its data provider</th><td>Supply player lookup data.</td></tr>
+      <tr><th>GitHub</th><td>Hosts downloads and app updates.</td></tr>
+      <tr><th>Level Infinite</th><td>Provides the official stats for your own account when you ask for them.</td></tr>
+    </table>
+    <p>We don't sell your data and we don't show ads.</p>
+
+    <h2>This website</h2>
+    <p>This site has no analytics and sets no cookies. It loads fonts from Google Fonts, so Google can see your IP address when the page loads.</p>
+
+    <h2>How long we keep things</h2>
+    <p>Account data stays until you ask us to delete it. Daily usage counts are kept for as long as your account exists. When we delete an account it is removed from our database. Copies may remain in our hosting provider's backups for a limited time.</p>
+
+    <h2>Your choices</h2>
+    <ul>
+      <li>Sign out of your DF Tracker account any time in Settings.</li>
+      <li>Leave the community leaderboard any time in the app.</li>
+      <li>Ask to see, correct, or delete the data we hold about you by contacting us (see the top of this page). If you're in the EU or UK, these are your rights under data protection law, and you can also complain to your local data protection authority.</li>
+    </ul>
+
+    <h2>Children</h2>
+    <p>DF Tracker isn't meant for children under 13, and Discord doesn't allow them to have accounts.</p>
+
+    <h2>Security</h2>
+    <p>Account data is kept in a database that the app and the internet can't read directly. Only our server can, using a key that is never part of the app. No system is perfectly secure, so we can't promise it will never be breached.</p>
+
+    <h2>Changes</h2>
+    <p>If we change what we collect, we'll update this page and the date at the top.</p>
+  </main>
+
+  <footer>
+    <p><a href="index.html">Back to DF Tracker</a></p>
+    <p>DF Tracker is an independent fan-made project. It is not affiliated with, endorsed by, or sponsored by Level Infinite, Proxima Beta, or the developers of Delta Force. Delta Force and related names and marks belong to their respective owners.</p>
+  </footer>
+</div>
+</body>
+</html>
