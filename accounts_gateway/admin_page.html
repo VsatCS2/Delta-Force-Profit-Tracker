@@ -217,7 +217,7 @@
             el('button', { class: 'primary', on: { click: async () => {
               try { await api('PUT', '/features/' + f.key, { label: label.value, description: desc.value, min_tier: tier.value, enabled: on.checked, free_limit: fl.value, pro_limit: pl.value, sort: f.sort }); toast('Saved ' + f.key); }
               catch (e) { toast(e.message, true); } } } }, 'Save'),
-            el('button', { class: 'danger', on: { click: async () => { if (!confirm('Delete feature ' + f.key + '?')) return; try { await api('DELETE', '/features/' + f.key); loadFeatures(); } catch (e) { toast(e.message, true); } } } }, 'Delete')))));
+            (d.builtin || []).includes(f.key) ? '' : el('button', { class: 'danger', on: { click: async () => { if (!confirm('Delete feature ' + f.key + '?')) return; try { await api('DELETE', '/features/' + f.key); loadFeatures(); } catch (e) { toast(e.message, true); } } } }, 'Delete')))));
       }
     } catch (e) { toast(e.message, true); }
   }
