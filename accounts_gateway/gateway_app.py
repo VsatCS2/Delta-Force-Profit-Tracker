@@ -28,7 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from auth import AuthError, Verifier
-from entitlements import DEFAULT_FEATURES, TIERS, parse_ts, resolve
+from entitlements import BUILTIN_KEYS, DEFAULT_FEATURES, PUBLIC_FLAGS, TIERS, parse_ts, resolve
 from store import MemoryStore, SupabaseStore
 from usage import UsageTracker, today
 
@@ -92,6 +92,9 @@ class HttpUpstream:
         return r.status_code, data
 
 
+# Bump when the app-facing API grows, so a deployed copy can be identified:
+#   1 = sign-in checks, /v1/me, /v1/call, admin     2 = + /v1/flags and built-in features
+API_VERSION = 2
 MIN_ADMIN_TOKEN = 20
 MAX_BODY = 16 * 1024
 
@@ -133,9 +136,10 @@ def create_app(settings, store=None, verifier=None, upstream=None, clock=time.ti
     global_used = {"day": today(clock), "n": 0}
     last_touch = {}
 
-    try:
-        if not store.list_features():
-            for f in DEFAULT_FEATURES:
+    try:                                        # add built-ins that are missing; never overwrite
+        have = {f["key"] for f in store.list_features()}
+        for f in DEFAULT_FEATURES:
+            if f["key"] not in have:
                 store.upsert_feature(f)
     except Exception:
         pass                                    # DB not ready yet: the app can still boot
@@ -227,9 +231,18 @@ def create_app(settings, store=None, verifier=None, upstream=None, clock=time.ti
     # ------------------------------------------------------------ public
     @app.get("/health")
     def health():
-        return {"ok": True, "store": store.name, "auth": verifier.mode,
+        return {"ok": True, "api": API_VERSION, "store": store.name, "auth": verifier.mode,
                 "upstream": bool(upstream),
                 "admin": len(settings.admin_token or "") >= MIN_ADMIN_TOKEN}
+
+    @app.get("/v1/flags")
+    def flags():
+        """On/off switches the app may read before anyone signs in. Only the
+        whitelisted keys are ever exposed, and only a true/false for each. A
+        switch that doesn't exist or can't be read is OFF."""
+        rows = {f["key"]: f for f in features()}
+        out = {k: bool(rows.get(k, {}).get("enabled", False)) for k in PUBLIC_FLAGS}
+        return JSONResponse({"flags": out}, headers={"Cache-Control": "public, max-age=60"})
 
     @app.get("/v1/me")
     def me(request: Request):
@@ -417,7 +430,8 @@ def create_app(settings, store=None, verifier=None, upstream=None, clock=time.ti
 
     @app.get("/admin/api/features", dependencies=admin_only)
     def a_features(request: Request):
-        return {"features": store.list_features(), "tiers": list(TIERS)}
+        return {"features": store.list_features(), "tiers": list(TIERS),
+                "builtin": list(BUILTIN_KEYS)}
 
     @app.put("/admin/api/features/{key}", dependencies=admin_only)
     def a_feature_put(key: str, request: Request, b: dict = Body(...)):
@@ -445,6 +459,8 @@ def create_app(settings, store=None, verifier=None, upstream=None, clock=time.ti
 
     @app.delete("/admin/api/features/{key}", dependencies=admin_only)
     def a_feature_delete(key: str, request: Request):
+        if key in BUILTIN_KEYS:
+            raise ApiError(400, "invalid", detail="Built-in feature: switch it off instead of deleting it.")
         store.delete_feature(key)
         features_cache["rows"] = None
         store.log_audit("admin", "delete_feature", key)
