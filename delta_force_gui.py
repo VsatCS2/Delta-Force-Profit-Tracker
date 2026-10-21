@@ -18,6 +18,7 @@ just the app itself — the sections, the data plumbing, and the workers.
 
 import io
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from pathlib import Path
 from tkinter import ttk, messagebox
 
 import delta_force_core as core
+import delta_force_native_login_ui as native_ui
 import delta_force_community as comm
 import delta_force_overlay as overlay_mod
 import delta_force_thirdparty as thirdparty_mod
@@ -40,7 +42,7 @@ import delta_force_legal as legal_mod
 from delta_force_paths import APP_DATA_DIR, migrate_legacy_file, resource_path
 from delta_force_version import APP_VERSION, CHANGELOG, version_tuple
 from delta_force_theme import (
-    THEMES, DEFAULT_THEME, OUTER_PAD_X, COL_GAP, SIDEBAR_W,
+    OUTER_PAD_X, COL_GAP, SIDEBAR_W,
     RAIL_W, RAIL_INNER_W, SIDEBAR_INNER_W, AUTO_REFRESH_OPTIONS,
     DEFAULT_AUTO_REFRESH_MINUTES, DEFAULT_SETTINGS,
     load_settings as _load_settings, save_settings as _save_settings,
@@ -49,7 +51,11 @@ from delta_force_theme import (
 from delta_force_widgets import (
     _Debouncer, make_sortable, round_rect, GradientFrame, Card, NavItem,
     ToggleSwitch, InfoIcon, icon_badge, status_pill, bind_mousewheel_to_canvas,
+    install_mousewheel_routing,
 )
+import delta_force_themes as themes_mod
+import delta_force_accounts as accounts_mod
+THEMES, DEFAULT_THEME = themes_mod.THEMES, themes_mod.DEFAULT_THEME
 
 try:
     from PIL import Image, ImageDraw, ImageTk
@@ -67,6 +73,15 @@ AVATAR_DIR.mkdir(exist_ok=True)
 # =====================================================================
 # Main app
 # =====================================================================
+# Pages that depend on a server-side feature. The server decides who may use
+# each one (admin page -> Features); a page here shows a "locked" panel when
+# the signed-in account, or a signed-out visitor, can't use its feature.
+TAB_FEATURES = {"lookup": "player_lookup", "alerts": "price_alerts",
+                "community": "community"}
+PAGE_TITLES = {"lookup": "Player Lookup", "alerts": "Price Alerts",
+               "community": "Community"}
+
+
 class TrackerApp:
     # (key, label, icon_key) — icon_key is drawn by delta_force_widgets's
     # _draw_nav_icon, not rendered as a font glyph. See that module's
@@ -75,6 +90,7 @@ class TrackerApp:
         ("overview",  "Overview",  "overview"),
         ("profile",   "Profile",   "profile"),
         ("maps",      "Maps",      "maps"),
+        ("operators", "Operators", "profile"),
         ("matches",   "Matches",   "matches"),
         ("community", "Community", "community"),
         ("lookup",    "Player Lookup", "lookup"),
@@ -86,7 +102,7 @@ class TrackerApp:
         self.root = root
         self.root.title(f"Delta Force Profit Tracker v{APP_VERSION}")
         self.root.geometry("1280x820")
-        self.root.minsize(1080, 680)
+        self.root.minsize(1080, 720)
         self._set_window_icon()
 
         self.msg_queue = queue.Queue()
@@ -130,6 +146,9 @@ class TrackerApp:
         self.matches_page_size = 100
         self.matches_sort_key = "date"
         self.matches_sort_reverse = True
+        self.operators_sort_key = "net"
+        self.operators_sort_reverse = True
+        self._highlight_operator = None
         self.maps_sort_key = "net"
         self.maps_sort_reverse = True
         self._highlight_map = None
@@ -173,9 +192,8 @@ class TrackerApp:
 
         # --- Load settings (theme + everything else) ---
         self.settings = _load_settings()
-        self.theme_name = self.settings.get("theme", DEFAULT_THEME)
-        if self.theme_name not in THEMES:
-            self.theme_name = DEFAULT_THEME
+        self.theme_name = themes_mod.resolve_theme_name(
+            self.settings.get("theme", DEFAULT_THEME))
         self.colors = THEMES[self.theme_name]
 
         # --- Session tracking ---
@@ -197,6 +215,7 @@ class TrackerApp:
             "write", lambda *_: self._search_debouncer.trigger())
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        install_mousewheel_routing(self.root)
 
         # --- Overlay / global hotkey / system tray ---
         # Built unconditionally (cheap - no thread starts until enabled),
@@ -222,6 +241,7 @@ class TrackerApp:
         if self.settings.get("search_overlay_enabled"):
             self._start_search_hotkey_listener()
 
+        self._setup_accounts()
         self._build_layout()
         self._load_cached_data(initial=True)
         self.root.after(100, self._poll_queue)
@@ -229,6 +249,7 @@ class TrackerApp:
         self.root.after(400, lambda: self.start_asset_calendar_fetch(silent=True))
         self.root.after(450, lambda: self.start_weekly_report_fetch(silent=True))
         self.root.after(700, self._start_update_check)
+        self.root.after(1500, self._accounts_tick)
         self.root.after(2500, self._community_startup_check)
         self.root.after(1000, self._repair_startup_entry)
         self.root.after(200, self._poll_avatars)
@@ -240,6 +261,7 @@ class TrackerApp:
         # First price-alert check shortly after startup, once the initial
         # fetches have settled; the poll then reschedules itself.
         self.root.after(8000, self._run_price_alert_poll)
+        self.root.after(2000, self._post_update_housekeeping)
 
         # --run-at-boot launched with --minimized: apply after the window
         # has fully constructed (deferred via after(), not done inline
@@ -359,6 +381,9 @@ class TrackerApp:
         self.theme_name = name
         self.colors = THEMES[name]
         _save_settings({"theme": name})
+        # The overlays build their windows each time they open, from this.
+        self.overlay._colors = self.colors
+        self.search_overlay._colors = self.colors
         self._rebuild_ui()
 
     def _rebuild_ui(self):
@@ -420,28 +445,11 @@ class TrackerApp:
         root_body = self.bg.body
         root_body.configure(bg=c["BG_TOP"])
 
-        header = tk.Frame(root_body, bg=c["BG_TOP"], height=88)
-        header.pack(side="top", fill="x", padx=OUTER_PAD_X, pady=(24, 0))
-        header.pack_propagate(False)
-
-        title = tk.Frame(header, bg=c["BG_TOP"])
-        title.pack(side="left", fill="y")
-        tk.Label(title, text="Delta Force", bg=c["BG_TOP"], fg=c["FG"],
-                 font=("Segoe UI Semibold", 24)).pack(side="left")
-        tk.Label(title, text="  Profit Tracker", bg=c["BG_TOP"], fg=c["FG_MUTED"],
-                 font=("Segoe UI", 24)).pack(side="left")
-
-        right = tk.Frame(header, bg=c["BG_TOP"])
-        right.pack(side="right", fill="y")
-        tk.Label(right, text="THEME", bg=c["BG_TOP"], fg=c["FG_MUTED"],
-                 font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 10))
-        self.theme_var = tk.StringVar(value=self.theme_name)
-        theme_combo = ttk.Combobox(right, textvariable=self.theme_var,
-                                   values=list(THEMES.keys()),
-                                   state="readonly", width=10)
-        theme_combo.bind("<<ComboboxSelected>>",
-                         lambda e: self._change_theme(self.theme_var.get()))
-        theme_combo.pack(side="left", pady=24)
+        self.header_banner = themes_mod.HeaderBanner(
+            root_body, c, self.theme_name, on_select=self._change_theme,
+            pad_x=OUTER_PAD_X,
+            custom_path=self.settings.get("banner_image") or None)
+        self.header_banner.pack(side="top", fill="x")
 
         body = tk.Frame(root_body, bg=c["BG_TOP"])
         body.pack(side="top", fill="both", expand=True,
@@ -453,7 +461,7 @@ class TrackerApp:
         self.sidebar.pack_propagate(False)
         self._build_sidebar(self.sidebar.body)
 
-        self.rail = Card(body, c, padding=(24, 24), radius=16, shadow=True)
+        self.rail = Card(body, c, padding=(22, 18), radius=16, shadow=True)
         self.rail.configure(width=RAIL_W)
         self.rail.pack(side="right", fill="y", padx=(COL_GAP, 0))
         self.rail.pack_propagate(False)
@@ -488,6 +496,8 @@ class TrackerApp:
         self._build_overview_section()
         self._build_profile_section()
         self._build_maps_section()
+        self._build_operators_section()
+        self._build_locked_section()
         self._build_matches_section()
         self._build_community_section()
         self._build_lookup_section()
@@ -503,13 +513,16 @@ class TrackerApp:
 
         brand = tk.Frame(parent, bg=c["SURFACE"])
         brand.pack(fill="x", padx=22, pady=(26, 20))
+        self._sb_brand = brand
+        self._sb_tight = 0
+        self._sb_saved = {}
         tk.Label(brand, text="◈", bg=c["SURFACE"], fg=c["ACCENT"],
                  font=("Segoe UI", 18)).pack(side="left")
         tk.Label(brand, text="  DF Tracker", bg=c["SURFACE"], fg=c["FG"],
                  font=("Segoe UI Semibold", 13)).pack(side="left")
 
-        tk.Frame(parent, bg=c["BORDER_SOFT"], height=1).pack(
-            fill="x", padx=22, pady=(0, 18))
+        self._sb_divider = tk.Frame(parent, bg=c["BORDER_SOFT"], height=1)
+        self._sb_divider.pack(fill="x", padx=22, pady=(0, 18))
 
         tk.Label(parent, text="MENU", bg=c["SURFACE"], fg=c["FG_MUTED"],
                  font=("Segoe UI", 8, "bold"), anchor="w").pack(
@@ -552,21 +565,71 @@ class TrackerApp:
                                       wraplength=SIDEBAR_INNER_W, justify="left")
         self.sidebar_creds.pack(fill="x", pady=(8, 0))
 
-        tk.Label(footer, text=f"v{APP_VERSION}", bg=c["SURFACE"],
-                 fg=c["FG_MUTED"], font=("Segoe UI", 8),
-                 anchor="w").pack(fill="x", pady=(4, 0))
+        self._sb_version = tk.Label(footer, text=f"v{APP_VERSION}", bg=c["SURFACE"],
+                                    fg=c["FG_MUTED"], font=("Segoe UI", 8),
+                                    anchor="w")
+        self._sb_version.pack(fill="x", pady=(4, 0))
+
+        self._sb_parent = parent
+        self.sidebar.bind("<Configure>",
+                          lambda e: self.root.after_idle(self._fit_sidebar))
+        self.root.after_idle(self._fit_sidebar)
+
+    def _apply_sidebar_density(self):
+        lvl = self._sb_tight
+        for item in self._nav_items.values():
+            item.configure(height=(46, 40, 34)[lvl])
+            item.pack_configure(pady=(3, 2, 1)[lvl])
+        self._sb_brand.pack_configure(pady=[(26, 20), (16, 10), (10, 6)][lvl])
+        self._sb_divider.pack_configure(pady=[(0, 18), (0, 10), (0, 6)][lvl])
+        if lvl >= 2:
+            self._sb_version.pack_forget()
+        else:
+            self._sb_version.pack(fill="x", pady=(4, 0))
+
+    def _fit_sidebar(self):
+        """Keep every menu entry visible on a short window by tightening
+        spacing, and relax again when there's room."""
+        parent = getattr(self, "_sb_parent", None)
+        try:
+            if parent is None or not parent.winfo_exists():
+                return
+            parent.update_idletasks()
+            avail, need = parent.winfo_height(), parent.winfo_reqheight()
+        except tk.TclError:
+            return
+        if avail < 50:
+            return
+        if need > avail and self._sb_tight < 2:
+            self._sb_tight += 1
+            self._apply_sidebar_density()
+            parent.update_idletasks()
+            self._sb_saved[self._sb_tight] = max(0, need - parent.winfo_reqheight())
+            self.root.after_idle(self._fit_sidebar)
+        elif (self._sb_tight > 0 and
+              avail >= need + self._sb_saved.get(self._sb_tight, 9999) + 4):
+            self._sb_tight -= 1
+            self._apply_sidebar_density()
+            self.root.after_idle(self._fit_sidebar)
 
     def _show_section(self, key: str):
         self.active_section = key
         for k, item in self._nav_items.items():
             item.set_active(k == key)
 
+        feature = TAB_FEATURES.get(key)
+        decision = self.accounts.can(feature) if feature else None
+        locked = decision is not None and not decision.allowed
+        target = "_locked" if locked else key
         for k, frame in self._section_frames.items():
-            if k == key:
+            if k == target:
                 frame.pack(fill="both", expand=True)
             else:
                 frame.pack_forget()
 
+        if locked:
+            self._render_locked(key, decision)
+            return
         self._rerender_section(key)
 
     # ------------------------------------------------------------------
@@ -574,77 +637,68 @@ class TrackerApp:
     # ------------------------------------------------------------------
     def _build_rail(self, parent):
         c = self.colors
+        # No scrolling: the rail is laid out compactly so everything fits,
+        # and _fit_rail() tightens spacing further on a short window.
+        inner = tk.Frame(parent, bg=c["SURFACE"])
+        inner.pack(fill="both", expand=True)
+        self._rail_inner = inner
+        self._rail_tight = 0
+        self._rail_saved = {}
+        self._rail_rows_frames = []
+        self._rail_buttons = []
 
-        # Wrapped in a scrolling canvas, same pattern as the Settings
-        # tab: Quick Stats + actions can comfortably exceed the rail's
-        # visible height on a smaller window, and a silently-clipped
-        # button/caption is worse than an occasional scrollbar.
-        scroll_holder = tk.Frame(parent, bg=c["SURFACE"])
-        scroll_holder.pack(fill="both", expand=True)
-
-        canvas = tk.Canvas(scroll_holder, bg=c["SURFACE"], highlightthickness=0)
-        scroll = ttk.Scrollbar(scroll_holder, orient="vertical",
-                                command=canvas.yview)
-        inner = tk.Frame(canvas, bg=c["SURFACE"])
-        inner_win = canvas.create_window((0, 0), window=inner, anchor="nw")
-        inner.bind("<Configure>",
-                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>",
-                   lambda e: canvas.itemconfig(inner_win, width=e.width))
-        canvas.configure(yscrollcommand=scroll.set)
-        # Pack the scrollbar before the canvas: with only the canvas
-        # using expand=True, packing it first claims the *entire*
-        # remaining cavity immediately, leaving the scrollbar a 0-width
-        # sliver (present, but invisible and useless). Scrollbar-first
-        # gives it its real width, and the canvas still expands to fill
-        # whatever's left.
-        scroll.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        bind_mousewheel_to_canvas(canvas)
-
-        tk.Label(inner, text="Quick Stats", bg=c["SURFACE"], fg=c["FG"],
-                 font=("Segoe UI Semibold", 14), anchor="w").pack(
-            fill="x", pady=(0, 18))
+        self._rail_title = tk.Label(
+            inner, text="Quick Stats", bg=c["SURFACE"], fg=c["FG"],
+            font=("Segoe UI Semibold", 14), anchor="w")
+        self._rail_title.pack(fill="x", pady=(0, 10))
 
         self.rail_rows = {}
-        # Only these two need a tooltip - "best" here means highest
-        # TOTAL net income across every match on that map/with that
-        # operator, not average per match or win rate, and that specific
-        # meaning isn't inferable from the label alone (confirmed by
-        # checking core.best_map_and_operator's actual ranking logic
-        # rather than assuming). The other rail stats are self-
-        # explanatory as labeled, so they don't get one.
         rail_explanations = {
             "best_map": "Ranked by total net income across every match "
                         "played on that map - not the average per match, "
                         "and not win rate.",
             "best_op": "Ranked by total net income across every match "
-                      "played with that operator - not the average per "
-                      "match, and not win rate.",
+                       "played with that operator - not the average per "
+                       "match, and not win rate. Click to see every "
+                       "operator.",
         }
+
+        # Short stats: label on the left, value on the right.
         for key, label in [
-            ("matches",  "MATCHES"),
-            ("wl",       "WINS / LOSSES"),
-            ("winrate",  "WIN RATE"),
-            ("avg",      "AVG PER MATCH"),
-            ("best_map", "BEST MAP"),
-            ("best_op",  "BEST OPERATOR"),
+            ("matches", "MATCHES"),
+            ("wl", "WINS / LOSSES"),
+            ("winrate", "WIN RATE"),
+            ("avg", "AVG PER MATCH"),
         ]:
             row = tk.Frame(inner, bg=c["SURFACE"])
-            row.pack(fill="x", pady=7)
+            row.pack(fill="x", pady=4)
+            tk.Label(row, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 9, "bold"), anchor="w").pack(side="left")
+            val = tk.Label(row, text="—", bg=c["SURFACE"], fg=c["FG"],
+                           font=("Segoe UI Semibold", 12), anchor="e")
+            val.pack(side="right")
+            self.rail_rows[key] = val
+            self._rail_rows_frames.append(row)
+
+        tk.Frame(inner, bg=c["BORDER_SOFT"], height=1).pack(
+            fill="x", pady=(8, 6))
+
+        # Longer values (name + amount): stacked.
+        for key, label in [("best_map", "BEST MAP"), ("best_op", "BEST OPERATOR")]:
+            row = tk.Frame(inner, bg=c["SURFACE"])
+            row.pack(fill="x", pady=5)
             header = tk.Frame(row, bg=c["SURFACE"])
             header.pack(fill="x")
             tk.Label(header, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
                      font=("Segoe UI", 9, "bold"), anchor="w").pack(side="left")
-            if key in rail_explanations:
-                self._info_icon(header, rail_explanations[key]).pack(
-                    side="left", padx=(5, 0))
+            self._info_icon(header, rail_explanations[key]).pack(
+                side="left", padx=(5, 0))
             val = tk.Label(row, text="—", bg=c["SURFACE"], fg=c["FG"],
-                           font=("Segoe UI Semibold", 13), anchor="w",
+                           font=("Segoe UI Semibold", 12), anchor="w",
                            justify="left", wraplength=RAIL_INNER_W)
-            val.pack(fill="x", pady=(4, 0))
+            val.pack(fill="x", pady=(3, 0))
             self.rail_rows[key] = val
+            self._rail_rows_frames.append(row)
 
         self.rail_rows["best_map"].configure(cursor="hand2")
         self.rail_rows["best_map"].bind("<Button-1>", lambda e: self._jump_to_map())
@@ -652,42 +706,80 @@ class TrackerApp:
         self.rail_rows["best_op"].bind("<Button-1>", lambda e: self._jump_to_operator())
 
         actions = tk.Frame(inner, bg=c["SURFACE"])
-        actions.pack(fill="x", pady=(20, 0))
+        actions.pack(fill="x", pady=(10, 0))
+        tk.Frame(actions, bg=c["BORDER_SOFT"], height=1).pack(fill="x", pady=(0, 10))
 
-        tk.Frame(actions, bg=c["BORDER_SOFT"], height=1).pack(fill="x", pady=(0, 16))
+        # Only the actions you'll reach for constantly live here; slower or
+        # rarer ones are in Settings.
+        def rail_btn(text, command, primary=False, last=False):
+            b = self._pill_button(actions, text, command, primary=primary,
+                                  height=36)
+            b.pack(fill="x", pady=(3, 0) if last else 3)
+            self._rail_buttons.append(b)
+            return b
 
-        # Only the actions you'll reach for constantly live here. Anything
-        # slower, rarer, or more of a "settings" toggle (full re-fetch,
-        # profile pull, backfilling match details, CSV export, Discord
-        # RPC) lives in Settings -> Data & Export / Profile & Match
-        # Details instead, so this rail doesn't turn into a wall of
-        # look-alike buttons.
-        self.login_btn = self._pill_button(actions, "Log In (browser)",
-                                            self.start_browser_login, primary=True)
-        self.login_btn.pack(fill="x", pady=4)
+        self.login_btn = rail_btn("Log In (browser)", self.start_browser_login,
+                                  primary=True)
+        self.native_login_btn = rail_btn("Log In (email)", self.start_native_login)
+        self.quick_btn = rail_btn("Refresh Today", self.start_quick_refresh)
+        self.refresh_btn = rail_btn("Sync New Matches",
+                                    lambda: self.start_fetch(False), last=True)
 
-        self.quick_btn = self._pill_button(actions, "Refresh Today",
-                                           self.start_quick_refresh, primary=False)
-        self.quick_btn.pack(fill="x", pady=4)
-        self.refresh_btn = self._pill_button(actions, "Sync New Matches",
-                                             lambda: self.start_fetch(False))
-        self.refresh_btn.pack(fill="x", pady=(4, 0))
-
-        tk.Label(actions,
-                 text="Today = fast, recent pages only. Sync = also "
-                      "catches older matches you missed. Full re-pull "
-                      "and profile refresh are in Settings.",
-                 bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
-                 anchor="w", justify="left",
-                 wraplength=RAIL_INNER_W).pack(fill="x", pady=(8, 4))
+        self._rail_hint = tk.Label(
+            actions,
+            text="Refresh Today checks recent matches. Sync also catches older ones.",
+            bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
+            anchor="w", justify="left", wraplength=RAIL_INNER_W)
+        self._rail_hint.pack(fill="x", pady=(6, 0))
 
         settings = _load_settings()
         self.rpc_var = tk.BooleanVar(value=settings.get("discord_rpc", False))
-
         self.debug_var = tk.BooleanVar(value=core.is_debug())
-        self._toggle_row(actions, "Show debug log", self.debug_var,
-                         self._toggle_debug_panel, font_size=9,
-                         fg=c["FG_MUTED"], pack_opts={"fill": "x", "pady": (6, 4)})
+
+        self._apply_email_login_visibility()
+        self.rail.bind("<Configure>",
+                       lambda e: self.root.after_idle(self._fit_rail))
+        self.root.after_idle(self._fit_rail)
+
+    def _apply_rail_density(self):
+        level = self._rail_tight
+        for row in self._rail_rows_frames:
+            row.pack_configure(pady=(2 if level >= 2 else 4))
+        for b in self._rail_buttons:
+            if b.winfo_manager() == "pack":          # skip a hidden button (pack_configure would re-show it)
+                b.pack_configure(pady=(1 if level >= 2 else 3))
+        if level >= 1:
+            self._rail_hint.pack_forget()
+        else:
+            self._rail_hint.pack(fill="x", pady=(6, 0))
+        self._rail_title.pack_configure(pady=(0, 4 if level >= 2 else 10))
+
+    def _fit_rail(self):
+        """Keep the whole rail visible without a scrollbar: on a short
+        window, drop the hint line first, then tighten spacing; relax again
+        when the window grows."""
+        inner = getattr(self, "_rail_inner", None)
+        try:
+            if inner is None or not inner.winfo_exists():
+                return
+            inner.update_idletasks()
+            avail, need = inner.winfo_height(), inner.winfo_reqheight()
+        except tk.TclError:
+            return
+        if avail < 50:
+            return
+        if need > avail and self._rail_tight < 2:
+            self._rail_tight += 1
+            self._apply_rail_density()
+            inner.update_idletasks()
+            self._rail_saved[self._rail_tight] = max(
+                0, need - inner.winfo_reqheight())
+            self.root.after_idle(self._fit_rail)
+        elif (self._rail_tight > 0 and
+              avail >= need + self._rail_saved.get(self._rail_tight, 9999) + 4):
+            self._rail_tight -= 1
+            self._apply_rail_density()
+            self.root.after_idle(self._fit_rail)    # keep relaxing if there's room
 
     def _toggle_row(self, parent, text, variable, command, *,
                     font_size=10, fg=None, wraplength=None,
@@ -722,42 +814,10 @@ class TrackerApp:
         stat is explained in more than one spot."""
         return InfoIcon(parent, self.colors, explanation)
 
-    def _pill_button(self, parent, text, command, primary=False):
-        c = self.colors
-        bg = c["ACCENT"] if primary else c["SURFACE_ALT"]
-        fg = c["BG_BOTTOM"] if primary else c["FG"]
-        hover_bg = c["ACCENT_HI"] if primary else c["SURFACE_HOVER"]
-
-        btn = tk.Label(parent, text=text, bg=bg, fg=fg,
-                       font=("Segoe UI Semibold", 10),
-                       padx=16, pady=10, anchor="center", cursor="hand2")
-        btn._enabled = True
-        btn._primary = primary
-
-        def on_enter(_e):
-            if btn._enabled:
-                btn.configure(bg=hover_bg)
-
-        def on_leave(_e):
-            btn.configure(bg=bg if btn._enabled else c["SURFACE_ALT"])
-
-        def on_click(_e):
-            if btn._enabled:
-                command()
-
-        btn.bind("<Enter>", on_enter)
-        btn.bind("<Leave>", on_leave)
-        btn.bind("<Button-1>", on_click)
-
-        def set_state(state):
-            enabled = (state != "disabled")
-            btn._enabled = enabled
-            btn.configure(bg=bg if enabled else c["SURFACE_ALT"],
-                          fg=fg if enabled else c["FG_MUTED"],
-                          cursor="hand2" if enabled else "arrow")
-
-        btn.set_state = set_state
-        return btn
+    def _pill_button(self, parent, text, command, primary=False, height=None):
+        """Rounded gradient button (flat if Pillow is unavailable)."""
+        return themes_mod.GradientButton(parent, text, command, self.colors,
+                                         primary=primary, height=height)
 
     def _update_rail(self):
         ov = core.overview(self.rows)
@@ -803,8 +863,8 @@ class TrackerApp:
     def _jump_to_operator(self):
         if not self._best_op_name:
             return
-        self.search_var.set(self._best_op_name)
-        self._show_section("matches")
+        self._highlight_operator = self._best_op_name
+        self._show_section("operators")
 
     # ------------------------------------------------------------------
     # First-run login prompt
@@ -822,19 +882,14 @@ class TrackerApp:
 
         answer = messagebox.askyesno(
             "Welcome to DF Tracker",
-            "Before the tracker can fetch your stats, you need to log in.\n\n"
-            "Click Yes to open a browser window where you can sign in. "
-            "Just log in normally — the tracker picks up everything it "
-            "needs automatically from there.\n\n"
-            "Open the login browser now?",
+            "Log in to load your stats. Open the login window now?",
             parent=self.root,
         )
         if answer:
             self.start_browser_login()
         else:
             self.set_status(
-                "Not logged in. Click 'Log In (browser)' in the right sidebar "
-                "when you're ready.")
+                "Not logged in. Use Log In on the right when you're ready.")
 
     # ------------------------------------------------------------------
     # Sections
@@ -1048,9 +1103,7 @@ class TrackerApp:
         self._session_inactive = tk.Frame(session_card.body, bg=c["SURFACE"])
         session_intro = tk.Label(
             self._session_inactive,
-            text="Track a play session separately from calendar days — "
-                 "handy if you play past midnight and don't want profit "
-                 "split between \"yesterday\" and \"today\".",
+            text="Track a play session on its own, separate from calendar days.",
             bg=c["SURFACE"], fg=c["FG_DIM"], font=("Segoe UI", 10),
             anchor="w", justify="left")
         session_intro.pack(fill="x", pady=(0, 12))
@@ -1190,10 +1243,7 @@ class TrackerApp:
                  fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
                  anchor="w").pack(side="left")
         self._info_icon(best_head,
-            "Your own extracted value, not a combined total with them - "
-            "specifically from the matches you WON together this week "
-            "(the count above is wins with them, not every match played "
-            "together).").pack(side="left", padx=(5, 0))
+            "Value you extracted in the matches you won together this week.").pack(side="left", padx=(5, 0))
         self.wh_best_friend_label = tk.Label(
             best_col, text="—", bg=c["SURFACE"], fg=c["FG"],
             font=("Segoe UI Semibold", 12), anchor="w")
@@ -1211,10 +1261,7 @@ class TrackerApp:
                  fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
                  anchor="w").pack(side="left")
         self._info_icon(worst_head,
-            "Your own lost value, not a combined total with them - "
-            "specifically from the matches you LOST together this week "
-            "(the count above is losses with them, not every match "
-            "played together).").pack(side="left", padx=(5, 0))
+            "Value you lost in the matches you lost together this week.").pack(side="left", padx=(5, 0))
         self.wh_worst_friend_label = tk.Label(
             worst_col, text="—", bg=c["SURFACE"], fg=c["FG"],
             font=("Segoe UI Semibold", 12), anchor="w")
@@ -1608,7 +1655,7 @@ class TrackerApp:
 
         if stats["matches"] == 0:
             self.session_matches_label.configure(
-                text="Tracking started — stats will fill in after your next match.")
+                text="Tracking started. Stats appear after your next match.")
         else:
             self.session_matches_label.configure(
                 text=f"{stats['matches']} matches — "
@@ -1662,8 +1709,7 @@ class TrackerApp:
         self._section_frames["maps"] = frame
 
         self._section_heading(frame, "Maps",
-                              "Where your profit is really coming from. "
-                              "Click a column header to sort.")
+                              "Where your profit comes from. Click a column to sort.")
 
         card = Card(frame, c, padding=(4, 4), radius=14, shadow=False)
         card.pack(fill="both", expand=True)
@@ -1697,6 +1743,163 @@ class TrackerApp:
         self.maps_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
 
+    def _build_operators_section(self):
+        c = self.colors
+        frame = tk.Frame(self.content, bg=c["BG_TOP"])
+        self._section_frames["operators"] = frame
+
+        self._section_heading(
+            frame, "Operators",
+            "What each operator has earned you, in credits. Click a column "
+            "to sort, double-click a row to see its matches.")
+
+        self.operators_summary = tk.Label(
+            frame, text="", bg=c["BG_TOP"], fg=c["FG_MUTED"],
+            font=("Segoe UI", 10), anchor="w")
+        self.operators_summary.pack(fill="x", pady=(0, 10))
+
+        card = Card(frame, c, padding=(4, 4), radius=14, shadow=False)
+        card.pack(fill="both", expand=True)
+
+        op_columns = [
+            ("operator", "Operator"), ("matches", "Matches"), ("wl", "W-L"),
+            ("winrate", "Win rate"), ("net", "Net Income"),
+            ("avg", "Avg / Match"),
+        ]
+        self.operators_tree = ttk.Treeview(
+            card.body, columns=tuple(cid for cid, _ in op_columns),
+            show="headings")
+        for col, _ in op_columns:
+            anchor = "w" if col == "operator" else (
+                "e" if col in ("net", "avg") else "center")
+            self.operators_tree.heading(col, text="", anchor=anchor)
+            self.operators_tree.column(col, anchor=anchor)
+        self.operators_tree.column("operator", width=120, minwidth=100,
+                                   anchor="w", stretch=True)
+        self.operators_tree.column("matches", width=76, minwidth=70,
+                                   anchor="center", stretch=False)
+        self.operators_tree.column("wl", width=70, minwidth=64,
+                                   anchor="center", stretch=False)
+        self.operators_tree.column("winrate", width=80, minwidth=72,
+                                   anchor="center", stretch=False)
+        self.operators_tree.column("net", width=112, minwidth=100,
+                                   anchor="e", stretch=False)
+        self.operators_tree.column("avg", width=104, minwidth=96,
+                                   anchor="e", stretch=False)
+
+        make_sortable(self.operators_tree, op_columns, self._on_operators_sort,
+                      initial_col=self.operators_sort_key,
+                      initial_reverse=self.operators_sort_reverse)
+
+        self.operators_tree.pack(fill="both", expand=True, side="left")
+        scroll = ttk.Scrollbar(card.body, orient="vertical",
+                               command=self.operators_tree.yview)
+        self.operators_tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.operators_tree.bind("<Double-1>", self._on_operator_double_click)
+        self.operators_tree.bind("<Configure>", self._fit_operator_columns)
+
+    def _fit_operator_columns(self, event):
+        """Show every column when there's room; on a narrow window drop the
+        least important ones (average, then win rate) rather than clipping."""
+        w = event.width
+        if w >= 560:
+            cols = ("operator", "matches", "wl", "winrate", "net", "avg")
+        elif w >= 460:
+            cols = ("operator", "matches", "wl", "winrate", "net")
+        else:
+            cols = ("operator", "matches", "wl", "net")
+        tree = self.operators_tree
+        if tuple(tree["displaycolumns"]) != cols:
+            tree["displaycolumns"] = cols
+
+    def _refresh_operators(self):
+        tree = self.operators_tree
+        tree.delete(*tree.get_children())
+        groups = {}
+        for r in self.rows:
+            g = groups.setdefault(r.get("operator_name") or "Unknown",
+                                  {"matches": 0, "wins": 0, "losses": 0,
+                                   "net": 0})
+            g["matches"] += 1
+            g["net"] += r["net_income"]
+            if r["result"] == "win":
+                g["wins"] += 1
+            elif r["result"] == "loss":
+                g["losses"] += 1
+
+        def rate(g):
+            played = g["wins"] + g["losses"]
+            return g["wins"] / played if played else 0.0
+
+        def sort_val(item):
+            name, g = item
+            key = self.operators_sort_key
+            if key == "operator":
+                return name.lower()
+            if key == "matches":
+                return g["matches"]
+            if key == "wl":
+                return g["wins"] - g["losses"]
+            if key == "winrate":
+                return rate(g)
+            if key == "avg":
+                return g["net"] / g["matches"]
+            return g["net"]
+
+        ordered = sorted(groups.items(), key=sort_val,
+                         reverse=self.operators_sort_reverse)
+
+        def amount(n):                    # the summary line says "credits"
+            return core.fmt_money(n).replace(" credits", "")
+
+        if groups:
+            total = sum(g["net"] for g in groups.values())
+            count = len(groups)
+            self.operators_summary.configure(
+                text=f"{count} operator{'s' if count != 1 else ''}, "
+                     f"{core.fmt_money(total)} total")
+        else:
+            self.operators_summary.configure(text="No matches yet.")
+
+        highlight = self._highlight_operator
+        self._highlight_operator = None
+        seen_iid = None
+        for i, (name, g) in enumerate(ordered):
+            tags = ["even" if i % 2 == 0 else "odd",
+                    "pos" if g["net"] >= 0 else "neg"]
+            is_target = bool(highlight and name == highlight)
+            if is_target:
+                tags.append("highlight")
+            iid = tree.insert("", "end", values=(
+                name, g["matches"], f"{g['wins']}-{g['losses']}",
+                f"{rate(g) * 100:.0f}%", amount(g["net"]),
+                amount(g["net"] / g["matches"])), tags=tuple(tags))
+            if is_target:
+                seen_iid = iid
+
+        tree.tag_configure("even", background=self.colors["SURFACE"])
+        tree.tag_configure("odd", background=self.colors["SURFACE_ALT"])
+        tree.tag_configure("pos", foreground=self.colors["POSITIVE"])
+        tree.tag_configure("neg", foreground=self.colors["NEGATIVE"])
+        tree.tag_configure("highlight",
+                           background=self.colors["ACCENT_SOFT"],
+                           foreground=self.colors["ACCENT_HI"])
+        if seen_iid is not None:
+            tree.see(seen_iid)
+
+    def _on_operators_sort(self, col, reverse):
+        self.operators_sort_key = col
+        self.operators_sort_reverse = reverse
+        self._refresh_operators()
+
+    def _on_operator_double_click(self, event):
+        row = self.operators_tree.identify_row(event.y)
+        if not row:
+            return
+        self.search_var.set(self.operators_tree.item(row, "values")[0])
+        self._show_section("matches")
+
     def _build_matches_section(self):
         c = self.colors
         frame = tk.Frame(self.content, bg=c["BG_TOP"])
@@ -1705,8 +1908,8 @@ class TrackerApp:
         head_row = tk.Frame(frame, bg=c["BG_TOP"])
         head_row.pack(fill="x")
         self._section_heading(head_row, "Matches",
-                              "Double-click any row for the full squad breakdown. "
-                              "Click a column header to sort.")
+                              "Double-click a row for the squad breakdown. Click a column to "
+                              "sort.")
 
         search_card = Card(frame, c, padding=(16, 10), radius=12, shadow=False)
         search_card.pack(fill="x", pady=(0, 18))
@@ -1837,10 +2040,8 @@ class TrackerApp:
         self._community_not_linked = tk.Frame(status_card.body, bg=c["SURFACE"])
         _join_label = tk.Label(
             self._community_not_linked,
-            text="Join using your Delta Force login — no separate "
-                 "account needed. Shares only the aggregate stats "
-                 "already on your Overview tab, under your in-game "
-                 "nickname. Never your DfTools login or match history.",
+            text="Join with your Delta Force login. Only your Overview totals "
+                 "are shared, under your in-game nickname.",
             bg=c["SURFACE"], fg=c["FG_DIM"], font=("Segoe UI", 10),
             anchor="w", justify="left", wraplength=700)
         _join_label.pack(fill="x", pady=(0, 12))
@@ -1883,8 +2084,7 @@ class TrackerApp:
         auto_row.pack(fill="x", pady=(4, 0))
         self.community_autosync_var = tk.BooleanVar(
             value=self.settings.get("community_auto_sync", True))
-        self._toggle_row(auto_row, "Keep my stats up to date automatically "
-                         "(after each match refresh)", self.community_autosync_var,
+        self._toggle_row(auto_row, "Keep my stats updated after each refresh", self.community_autosync_var,
                          self._on_community_autosync_toggle,
                          pack_opts={"side": "left"})
 
@@ -1992,8 +2192,7 @@ class TrackerApp:
         if not comm.SERVER_URL:
             self.community_link_btn.set_state("disabled")
             self.community_status_label.configure(
-                text="This build isn't pointed at a community server yet "
-                     "— see server/README.md.")
+                text="Community features aren't available in this version.")
             self.community_status_label.pack(fill="x")
             return
 
@@ -2076,8 +2275,8 @@ class TrackerApp:
             win.title("Player Profile")
             tk.Label(win, text="Couldn't load this player.", bg=c["BG_TOP"],
                      fg=c["NEGATIVE"], font=("Segoe UI", 11)).pack(pady=48)
-            tk.Label(win, text="They may have left the leaderboard, or the "
-                               "server couldn't be reached.",
+            tk.Label(win, text="They may have left the leaderboard, or the server is "
+                               "unreachable.",
                      bg=c["BG_TOP"], fg=c["FG_MUTED"], font=("Segoe UI", 9)
                      ).pack()
             return
@@ -2219,13 +2418,8 @@ class TrackerApp:
 
         self._section_heading(
             frame, "Player Lookup",
-            "Look up any player's combat stats and stash value by name - "
-            "from deltaforceapi.com, a third-party data source kept "
-            "separate from the official API everything else in this app "
-            "uses. Works for teammates, opponents, or yourself, though a "
-            "player the service has never seen before may take a few "
-            "minutes before stats are available - it queues first-time "
-            "lookups rather than answering instantly.")
+            "Look up any player's combat stats and stash value by name. "
+            "Works for teammates, opponents, or yourself.")
 
         scroll_holder = tk.Frame(frame, bg=c["BG_TOP"])
         scroll_holder.pack(fill="both", expand=True)
@@ -2303,10 +2497,9 @@ class TrackerApp:
         name = (name if name is not None else self.lookup_search_var.get()).strip()
         if not name:
             return
-        if not thirdparty_mod.is_configured():
+        if not thirdparty_mod.player_lookup_configured():
             self._render_lookup_empty(
-                "Player Lookup isn't set up yet - add a deltaforceapi.com "
-                "key to DELTAFORCEAPI_KEY in delta_force_config.py.",
+                "Player Lookup isn't available in this version.",
                 is_error=True)
             return
         self.lookup_search_var.set(name)
@@ -2351,7 +2544,7 @@ class TrackerApp:
         restarted. If stats are already loaded there's nothing to
         recover, so it does nothing (no extra requests on every refresh).
         """
-        if not thirdparty_mod.is_configured():
+        if not thirdparty_mod.player_lookup_configured():
             return
         nickname = self._linked_nickname()
         if not nickname or self._thirdparty_warmup_inflight:
@@ -2362,6 +2555,8 @@ class TrackerApp:
             self._thirdparty_warmup_attempts = 0
         elif self._thirdparty_warmup_started:
             return
+        elif not thirdparty_mod.auto_warmup_allowed():
+            return          # PLAYERAPI_AUTO_WARMUP = False: only on Refresh Profile
         self._thirdparty_warmup_started = True
         self._begin_thirdparty_fetch(nickname)
 
@@ -2396,7 +2591,7 @@ class TrackerApp:
         self._thirdparty_retry_after = None
         nickname = self._linked_nickname()
         if (self._thirdparty_has_data() or self._thirdparty_warmup_inflight
-                or not nickname or not thirdparty_mod.is_configured()):
+                or not nickname or not thirdparty_mod.player_lookup_configured()):
             return
         self._begin_thirdparty_fetch(nickname)
 
@@ -2411,7 +2606,8 @@ class TrackerApp:
             # player that was found but has no stats yet) and try again
             # later.
             self._thirdparty_profile_data = result
-            self._schedule_thirdparty_retry()
+            if thirdparty_mod.retry_worthwhile():
+                self._schedule_thirdparty_retry()
         # else: a refresh came back empty while good data is already on
         # screen - keep showing the good data, don't wipe it.
         if self.active_section == "profile":
@@ -2537,7 +2733,7 @@ class TrackerApp:
 
         if result is None:
             self._render_lookup_empty(
-                f"No player found for \"{searched_name}\".", is_error=True)
+                thirdparty_mod.failure_message(searched_name), is_error=True)
             return
 
         if searched_name.lower() in [n.lower() for n in self._lookup_recent_names]:
@@ -2563,12 +2759,14 @@ class TrackerApp:
         tk.Frame(body, bg=c["BORDER_SOFT"], height=1).pack(
             fill="x", pady=(14, 14))
 
+        if result.get("_partial_note"):
+            tk.Label(body, text=result["_partial_note"], bg=c["SURFACE"],
+                     fg=c["FG_MUTED"], font=("Segoe UI", 9), anchor="w",
+                     justify="left", wraplength=700).pack(fill="x", pady=(0, 10))
         has_data = self._build_thirdparty_stats_body(body, result)
         if not has_data:
-            tk.Label(body, text="No stats yet for this player - "
-                                "deltaforceapi.com queues players it "
-                                "hasn't analyzed before, so this can "
-                                "take a few minutes. Try again shortly.",
+            tk.Label(body, text=result.get("_no_stats_note") or
+                                "No stats yet for this player. Try again shortly.",
                      bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 9),
                      anchor="w", justify="left", wraplength=700).pack(
                 fill="x", pady=(0, 14))
@@ -2591,12 +2789,8 @@ class TrackerApp:
 
         self._section_heading(
             frame, "Price Alerts",
-            "Pick an item and the price you'd buy it at - you'll be "
-            "notified the moment its auction price drops to that. Checked "
-            "every minute while the app is open (it can sit minimized or "
-            "in the tray). Prices are timestamped snapshots from "
-            "deltaforceapi.com, so they can trail the live auction house "
-            "slightly; each alert shows how fresh its last price is.")
+            "Pick an item and a price. You'll be notified when its auction "
+            "price drops to it. Prices can trail the live auction slightly.")
 
         scroll_holder = tk.Frame(frame, bg=c["BG_TOP"])
         scroll_holder.pack(fill="both", expand=True)
@@ -2637,12 +2831,11 @@ class TrackerApp:
         self.alert_results_card.pack(fill="x", pady=(0, 10), padx=(0, 6))
         if thirdparty_mod.is_configured():
             self._render_alert_results_message(
-                "Search for an item above - a partial name works, e.g. "
-                "\"Reactor Master\".")
+                "Search for an item above. A partial name works, e.g. \"Reactor "
+                "Master\".")
         else:
             self._render_alert_results_message(
-                "Price Alerts need a deltaforceapi.com key - add one to "
-                "DELTAFORCEAPI_KEY in delta_force_config.py.")
+                "Price Alerts aren't available in this version.")
 
         # ---- 3. set the alert ----
         form = Card(inner, c, padding=(22, 16), radius=14)
@@ -2681,8 +2874,7 @@ class TrackerApp:
         self._pill_button(target_row, "Add Alert", self._add_price_alert,
                           primary=True).pack(side="left")
         tk.Label(form.body,
-                 text="Type the full amount (5,000,000) or shorthand: 5m, "
-                      "6.5m, 750k.", bg=c["SURFACE"], fg=c["FG_MUTED"],
+                 text="Enter an amount like 5,000,000, 5m, or 750k.", bg=c["SURFACE"], fg=c["FG_MUTED"],
                  font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(8, 0))
         self.alert_form_status = tk.Label(
             form.body, text="", bg=c["SURFACE"], fg=c["FG_MUTED"],
@@ -2711,8 +2903,8 @@ class TrackerApp:
                  anchor="w").pack(fill="x")
         sound_hint = tk.Label(
             text_col,
-            text="The pop-up can't appear over an exclusive-fullscreen "
-                 "game, so the sound is often what actually reaches you.",
+            text="Pop-ups can't show over exclusive-fullscreen games, but the "
+                 "sound still plays.",
             bg=c["BG_TOP"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
             anchor="w", justify="left")
         sound_hint.pack(fill="x")
@@ -2777,8 +2969,7 @@ class TrackerApp:
             return
         if not thirdparty_mod.is_configured():
             self._render_alert_results_message(
-                "Price Alerts need a deltaforceapi.com key - add one to "
-                "DELTAFORCEAPI_KEY in delta_force_config.py.", is_error=True)
+                "Price Alerts aren't available in this version.", is_error=True)
             return
         # Sequence number, so if two searches are ever in flight (Enter
         # pressed again before the first finishes) only the newest one's
@@ -2801,8 +2992,7 @@ class TrackerApp:
         self.alert_search_btn.set_state("normal")
         if items is None:
             self._render_alert_results_message(
-                "Couldn't search right now - check your connection and "
-                "try again.", is_error=True)
+                "Couldn't search. Check your connection.", is_error=True)
         elif not items:
             self._render_alert_results_message(
                 f'No tradeable items match "{query}". Try a shorter or '
@@ -2845,9 +3035,7 @@ class TrackerApp:
             self.alert_price_label.configure(text=text, fg=c["FG_DIM"])
         else:
             self.alert_price_label.configure(
-                text="No price available for this item right now - you "
-                     "can still set an alert and it'll start tracking "
-                     "once one appears.", fg=c["FG_MUTED"])
+                text="No price right now. You can still set an alert.", fg=c["FG_MUTED"])
 
     # ---- add / remove ----
     def _set_alert_form_status(self, text: str, kind: str = "muted"):
@@ -2915,8 +3103,7 @@ class TrackerApp:
                  bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8, "bold"),
                  anchor="w").pack(fill="x")
         if not self._price_alerts:
-            tk.Label(body, text="No alerts yet - find an item above and set "
-                                "the price you'd buy it at.",
+            tk.Label(body, text="No alerts yet. Find an item above and set a price.",
                      bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 10),
                      anchor="w").pack(fill="x", pady=(10, 0))
             return
@@ -3152,10 +3339,32 @@ class TrackerApp:
                          font=("Segoe UI", 8), anchor="w",
                          wraplength=760, justify="left").pack(fill="x", pady=(0, 8))
 
+        # ---- Account ----
+        if self.accounts.enabled:
+            section_title("Account",
+                          "Sign in to use online features like player lookup. "
+                          "This is separate from your game login.")
+            account_card = Card(self.settings_inner, c, padding=(22, 18), radius=12)
+            account_card.pack(fill="x", pady=(0, 6))
+            self._account_body = account_card.body
+            self._update_account_card()
+
+        # ---- Appearance ----
+        section_title("Appearance",
+                      "Pick a theme with the colored dots at the top of the "
+                      "window, or put your own picture in the banner.")
+        look_card = Card(self.settings_inner, c, padding=(22, 18), radius=12)
+        look_card.pack(fill="x", pady=(0, 6))
+        look_row = tk.Frame(look_card.body, bg=c["SURFACE"])
+        look_row.pack(fill="x")
+        self._pill_button(look_row, "Choose banner picture",
+                          self._choose_banner_image).pack(side="left")
+        self._pill_button(look_row, "Use theme artwork",
+                          self._clear_banner_image).pack(side="left", padx=(10, 0))
+
         # ---- Auto-refresh ----
         section_title("Auto-Refresh",
-                      "Automatically fetch new matches on an interval so the "
-                      "Discord presence and match history stay current.",
+                      "Check for new matches on a timer.",
                       icon_key="auto_refresh")
 
         auto_card = Card(self.settings_inner, c, padding=(22, 18), radius=12)
@@ -3203,7 +3412,7 @@ class TrackerApp:
 
         # ---- Notifications ----
         section_title("Notifications",
-                      "Get a small popup when auto-refresh finds new matches.",
+                      "",
                       icon_key="notifications")
 
         notif_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
@@ -3215,7 +3424,7 @@ class TrackerApp:
 
         # ---- Discord ----
         section_title("Discord Rich Presence",
-                      "Show your today's profit / W-L on your Discord profile.",
+                      "",
                       icon_key="discord")
 
         discord_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
@@ -3224,20 +3433,11 @@ class TrackerApp:
             value=self.settings.get("discord_rpc", False))
         self._toggle_row(discord_card.body, "Enable Discord Rich Presence",
                          self.settings_rpc_var, self._on_settings_rpc_toggle)
-        tk.Label(discord_card.body,
-                 text="Requires pypresence and DISCORD_CLIENT_ID in "
-                      "delta_force_rpc.py. The toggle in the right rail stays "
-                      "in sync with this one.",
-                 bg=c["SURFACE"], fg=c["FG_MUTED"],
-                 font=("Segoe UI", 8), anchor="w", justify="left",
-                 wraplength=740).pack(fill="x", pady=(8, 0))
 
         # ---- Overlay ----
         section_title("Overlay",
-                      "A quick-glance HUD (today's profit/loss, best "
-                      "raid, top loot) toggled by a keyboard shortcut "
-                      "that works even while the game has focus — so "
-                      "you don't have to alt-tab to check.",
+                      "A small in-game window with today's profit, your best match, "
+                      "and top loot. Opens with a shortcut.",
                       icon_key="overlay", pill=("Windows Only", "neutral"))
 
         overlay_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
@@ -3296,17 +3496,13 @@ class TrackerApp:
                          self.settings_tray_var, self._on_minimize_to_tray_toggle)
         if not overlay_mod.TrayIcon.available():
             tk.Label(overlay_card.body,
-                     text="pystray isn't installed in this build, so this "
-                          "option won't do anything even if checked.",
+                     text="The tray icon isn't available in this version.",
                      bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
                      anchor="w").pack(fill="x", pady=(4, 0))
 
         # ---- Search Overlay (Player Lookup, in-game) ----
         section_title("Search Overlay",
-                      "Look up a teammate or opponent by name without "
-                      "leaving the game - its own shortcut, independent "
-                      "of the overlay above. Uses the same deltaforceapi.com "
-                      "data as the Player Lookup page.",
+                      "Look up a player by name over the game, with its own shortcut.",
                       icon_key="lookup", pill=("Windows Only", "neutral"))
 
         search_overlay_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
@@ -3357,17 +3553,15 @@ class TrackerApp:
         self.search_overlay_status_label.pack(fill="x", pady=(10, 0))
         self._update_search_overlay_status_label()
 
-        if not thirdparty_mod.is_configured():
+        if not thirdparty_mod.player_lookup_configured():
             tk.Label(search_overlay_card.body,
-                     text="Player Lookup isn't set up yet - add a "
-                          "deltaforceapi.com key to DELTAFORCEAPI_KEY in "
-                          "delta_force_config.py to use this.",
+                     text="Player Lookup isn't available in this version.",
                      bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
                      anchor="w", wraplength=740).pack(fill="x", pady=(4, 0))
 
         # ---- Startup ----
         section_title("Startup",
-                      "Launch automatically when Windows starts.",
+                      "",
                       icon_key="startup", pill=("Windows Only", "neutral"))
 
         startup_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
@@ -3382,8 +3576,7 @@ class TrackerApp:
         self.settings_boot_minimized_var = tk.BooleanVar(
             value=self.settings.get("start_minimized", False))
         self._toggle_row(startup_card.body,
-                         "Start minimized (to tray if enabled above, "
-                         "otherwise just minimized)",
+                         "Start minimized",
                          self.settings_boot_minimized_var,
                          self._on_start_minimized_toggle,
                          pack_opts={"anchor": "w", "pady": (6, 0)})
@@ -3409,8 +3602,7 @@ class TrackerApp:
             value=self.settings.get("auto_download_updates", True))
         _, autodownload_switch = self._toggle_row(
             update_card.body,
-            "Automatically download updates in the background "
-            "(never installs without asking)",
+            "Download updates in the background",
             self.autodownload_var, self._on_autodownload_toggle,
             pack_opts={"anchor": "w", "pady": (0, 10)})
         if not can_self_install:
@@ -3439,7 +3631,7 @@ class TrackerApp:
             "<Configure>", lambda e: e.widget.configure(wraplength=e.width))
         if not comm.update_check_configured():
             self.update_status_label.configure(
-                text="This build isn't set up to check for updates.")
+                text="Updates aren't available in this version.")
 
         # ---- About & Legal ----
         section_title("About & Legal", "DF Tracker is an unofficial, fan-made tool.", icon_key="about_legal")
@@ -3473,10 +3665,8 @@ class TrackerApp:
 
         # ---- Profile & Match Details ----
         section_title("Profile & Match Details",
-                      "Pull your live profile card, or backfill the full "
-                      "squad/kill breakdown for older matches that don't "
-                      "have it yet. Backfilling is slow and rate-limited "
-                      "since it fetches one match at a time.",
+                      "Refresh your profile, or fill in squad and kill details for "
+                      "older matches. Filling in is slow.",
                       icon_key="profile")
 
         detail_card = Card(self.settings_inner, c, padding=(22, 18), radius=12)
@@ -3512,9 +3702,8 @@ class TrackerApp:
 
         # ---- Data & Export ----
         section_title("Data & Export",
-                      "Export the match history as CSVs, force a full "
-                      "re-pull ignoring the cache, or open the folder "
-                      "where the cache lives.",
+                      "Export your match history, run a full re-sync, or open the "
+                      "data folder.",
                       icon_key="data_export")
 
         data_card = Card(self.settings_inner, c, padding=(22, 18), radius=12)
@@ -3530,13 +3719,8 @@ class TrackerApp:
         data_buttons.pack(fill="x", pady=(12, 0))
 
         def small_btn(parent, text, command, primary=False):
-            bg = c["ACCENT"] if primary else c["SURFACE_ALT"]
-            fg = c["BG_BOTTOM"] if primary else c["FG"]
-            b = tk.Label(parent, text=text, bg=bg, fg=fg,
-                         font=("Segoe UI Semibold", 9),
-                         padx=14, pady=7, cursor="hand2")
+            b = self._pill_button(parent, text, command, primary=primary)
             b.pack(side="left", padx=(0, 8))
-            b.bind("<Button-1>", lambda e: command())
             return b
 
         small_btn(data_buttons, "Export CSVs", self.do_export, primary=True)
@@ -3544,9 +3728,15 @@ class TrackerApp:
         small_btn(data_buttons, "Refresh Data Stats", self._refresh_data_stats)
 
         self.refresh_all_btn = self._pill_button(
-            data_card.body, "Re-fetch All Matches (ignores cache, slow)",
+            data_card.body, "Re-fetch All Matches (slow)",
             lambda: self.start_fetch(True))
         self.refresh_all_btn.pack(fill="x", pady=(10, 0))
+
+        section_title("Troubleshooting")
+        trouble_card = Card(self.settings_inner, c, padding=(22, 16), radius=12)
+        trouble_card.pack(fill="x", pady=(0, 6))
+        self._toggle_row(trouble_card.body, "Show debug log", self.debug_var,
+                         self._toggle_debug_panel)
 
         self._refresh_data_stats()
 
@@ -3598,18 +3788,230 @@ class TrackerApp:
         if hasattr(self, "rpc_var"):
             self.settings_rpc_var.set(self.rpc_var.get())
 
+    # ------------------------------------------------------------------
+    # Accounts
+    # ------------------------------------------------------------------
+    def _setup_accounts(self):
+        self._account_busy = False
+        self._account_cancel = None
+        self._account_body = None
+        self.accounts = accounts_mod.Accounts()
+        if self.accounts.enabled:
+            try:
+                import delta_force_playerapi as _pa
+                _pa.set_auth_provider(self.accounts.access_token)
+                _pa.set_quota_listener(self.accounts.note_quota)
+            except ImportError:
+                pass
+        self.accounts.on_change(lambda: self.msg_queue.put(("accounts_changed", None)))
+
+    def _accounts_tick(self):
+        """Ask the server what this account may do, now and every 10 minutes."""
+        # Public switches (no sign-in needed). Always ask the server on launch and
+        # on every tick: trusting a recent saved copy meant a switch you had just
+        # flipped could take up to 10 minutes to reach a freshly reopened app.
+        self.accounts.refresh_flags_async(force=True)
+        if self.accounts.enabled and self.accounts.signed_in:
+            self.accounts.refresh_async()
+        self.root.after(10 * 60 * 1000, self._accounts_tick)
+
+    def _email_login_allowed(self):
+        """Email login is only offered while the server's `email_login` switch
+        is ON (it starts OFF). EMAIL_LOGIN_ENABLED = True in delta_force_config.py
+        is a local override for development builds."""
+        override = str(accounts_mod._c("EMAIL_LOGIN_ENABLED", "")).strip().lower()
+        return override in ("1", "true", "yes", "on") or self.accounts.flag("email_login")
+
+    def _apply_email_login_visibility(self):
+        btn = getattr(self, "native_login_btn", None)
+        if btn is None:
+            return
+        try:
+            shown = btn.winfo_manager() == "pack"
+            if self._email_login_allowed() and not shown:
+                btn.pack(fill="x", pady=(1 if self._rail_tight >= 2 else 3),
+                         after=self.login_btn)
+            elif not self._email_login_allowed() and shown:
+                btn.pack_forget()
+        except tk.TclError:
+            return
+        self.root.after_idle(self._fit_rail)
+
+    def _on_accounts_changed(self):
+        self._apply_email_login_visibility()
+        self._update_account_card()
+        # A locked page may have just become usable (or the other way round).
+        if self.active_section in TAB_FEATURES:
+            self._show_section(self.active_section)
+
+    def start_account_sign_in(self):
+        if self._account_busy or not self.accounts.enabled:
+            return
+        self._account_busy = True
+        self._account_cancel = threading.Event()
+        cancel = self._account_cancel
+        self._update_account_card()
+        self.set_status("Finish signing in in your browser...")
+
+        def worker():
+            try:
+                self.accounts.sign_in(timeout=180, cancel=cancel)
+                self.msg_queue.put(("account_signin_done", None))
+            except accounts_mod.SignInCancelled:
+                self.msg_queue.put(("account_signin_done", "cancelled"))
+            except Exception as e:
+                self.msg_queue.put(("account_signin_error", str(e) or "Sign-in failed."))
+        threading.Thread(target=worker, daemon=True, name="account-signin").start()
+
+    def _cancel_account_sign_in(self):
+        if self._account_cancel is not None:
+            self._account_cancel.set()
+
+    def _account_sign_out(self):
+        threading.Thread(target=self.accounts.sign_out, daemon=True).start()
+
+    def _open_upgrade_page(self):
+        import webbrowser
+        if self.accounts.upgrade_url:
+            webbrowser.open(self.accounts.upgrade_url)
+
+    def _update_account_card(self):
+        body = getattr(self, "_account_body", None)
+        if body is None:
+            return
+        try:
+            if not body.winfo_exists():
+                return
+            for w in body.winfo_children():
+                w.destroy()
+        except tk.TclError:
+            return
+        c = self.colors
+        st = self.accounts.status()
+
+        def line(text, fg=None, font=("Segoe UI", 10), pady=(0, 0)):
+            tk.Label(body, text=text, bg=c["SURFACE"], fg=fg or c["FG"], font=font,
+                     anchor="w", justify="left", wraplength=640).pack(fill="x", pady=pady)
+
+        if not st["signed_in"]:
+            line("You're not signed in.", font=("Segoe UI Semibold", 11))
+            line("Sign in with Discord to use player lookup and other online "
+                 "features. Tracking your own matches works without an account.",
+                 fg=c["FG_MUTED"], pady=(2, 12))
+            row = tk.Frame(body, bg=c["SURFACE"])
+            row.pack(fill="x")
+            if self._account_busy:
+                tk.Label(row, text="Waiting for your browser...", bg=c["SURFACE"],
+                         fg=c["FG_MUTED"], font=("Segoe UI", 10)).pack(side="left")
+                self._pill_button(row, "Cancel",
+                                  self._cancel_account_sign_in).pack(side="left", padx=(12, 0))
+            else:
+                self._pill_button(row, "Sign in with Discord",
+                                  self.start_account_sign_in, primary=True).pack(side="left")
+            return
+
+        head = tk.Frame(body, bg=c["SURFACE"])
+        head.pack(fill="x")
+        tk.Label(head, text=st["name"] or st["email"] or "Signed in", bg=c["SURFACE"],
+                 fg=c["FG"], font=("Segoe UI Semibold", 12)).pack(side="left")
+        status_pill(head, c, st["tier"].title(),
+                    "good" if st["tier"] == "pro" else "neutral").pack(side="left", padx=(10, 0))
+        if st["email"] and st["name"]:
+            line(st["email"], fg=c["FG_MUTED"], pady=(2, 0))
+        if st["banned"]:
+            line(st["banned"], fg=c["NEGATIVE"], pady=(8, 0))
+        elif st["lookups_limit"] is not None:
+            line(f"Lookup requests today: {st['lookups_used']} of {st['lookups_limit']}",
+                 fg=c["FG_MUTED"], pady=(8, 0))
+        elif st["lookups_used"]:
+            line(f"Lookup requests today: {st['lookups_used']}", fg=c["FG_MUTED"], pady=(8, 0))
+        if st["stale"]:
+            line("Couldn't reach the server for a while. Showing your last known plan.",
+                 fg=c["FG_MUTED"], font=("Segoe UI", 9), pady=(4, 0))
+        row = tk.Frame(body, bg=c["SURFACE"])
+        row.pack(fill="x", pady=(14, 0))
+        self._pill_button(row, "Sign out", self._account_sign_out).pack(side="left")
+        if st["upgrade_url"] and st["tier"] != "pro":
+            self._pill_button(row, "Upgrade", self._open_upgrade_page,
+                              primary=True).pack(side="left", padx=(10, 0))
+
+    def _build_locked_section(self):
+        c = self.colors
+        frame = tk.Frame(self.content, bg=c["BG_TOP"])
+        self._section_frames["_locked"] = frame
+        self._locked_body = tk.Frame(frame, bg=c["BG_TOP"])
+        self._locked_body.pack(fill="both", expand=True)
+
+    def _render_locked(self, key, decision):
+        c = self.colors
+        body = self._locked_body
+        for w in body.winfo_children():
+            w.destroy()
+        title = PAGE_TITLES.get(key, key.title())
+        tk.Label(body, text=title, bg=c["BG_TOP"], fg=c["FG"],
+                 font=("Segoe UI Semibold", 22), anchor="w").pack(fill="x", pady=(0, 14))
+        card = Card(body, c, padding=(28, 26), radius=14)
+        card.pack(fill="x")
+        headline = {"signin": f"Sign in to use {title}",
+                    "locked": f"{title} is part of Pro",
+                    "banned": "Account suspended",
+                    "disabled": f"{title} is unavailable"}.get(decision.reason, title)
+        tk.Label(card.body, text=headline, bg=c["SURFACE"], fg=c["FG"],
+                 font=("Segoe UI Semibold", 15), anchor="w").pack(fill="x")
+        message = decision.message
+        if decision.reason == "locked":
+            message = ("Upgrade your plan to use it." if self.accounts.upgrade_url
+                       else "It isn't included in your current plan.")
+        tk.Label(card.body, text=message, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 10), anchor="w", justify="left",
+                 wraplength=640).pack(fill="x", pady=(6, 16))
+        row = tk.Frame(card.body, bg=c["SURFACE"])
+        row.pack(fill="x")
+        if decision.reason == "signin":
+            self._pill_button(row, "Sign in with Discord", self.start_account_sign_in,
+                              primary=True).pack(side="left")
+        elif decision.reason == "locked" and self.accounts.upgrade_url:
+            self._pill_button(row, "See Pro", self._open_upgrade_page,
+                              primary=True).pack(side="left")
+
+    def _choose_banner_image(self):
+        if not HAVE_PIL:
+            messagebox.showinfo("Banner picture",
+                                "Banner pictures aren't available in this version.")
+            return
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title="Choose a banner picture",
+            filetypes=[("Pictures", "*.png *.jpg *.jpeg *.webp *.bmp"),
+                       ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            Image.open(path).verify()
+        except Exception:
+            messagebox.showerror("Banner picture", "That file isn't a picture "
+                                 "this app can open.")
+            return
+        _save_settings({"banner_image": path})
+        self.settings["banner_image"] = path
+        self.header_banner.set_custom_image(path)
+
+    def _clear_banner_image(self):
+        _save_settings({"banner_image": ""})
+        self.settings["banner_image"] = ""
+        self.header_banner.set_custom_image(None)
+
     def _update_overlay_status_label(self):
         if not hasattr(self, "overlay_status_label"):
             return
         c = self.colors
         if not self.settings.get("overlay_enabled"):
             self.overlay_status_label.configure(
-                text="Off. Turn on to check your stats without leaving the game.",
+                text="Off.",
                 fg=c["FG_MUTED"])
         elif not overlay_mod.IS_WINDOWS:
             self.overlay_status_label.configure(
-                text="This build isn't running on Windows, so the global "
-                     "shortcut can't be registered here.", fg=c["NEGATIVE"])
+                text="Shortcuts only work on Windows.", fg=c["NEGATIVE"])
         elif self.hotkey_listener.is_registered():
             _, _, label = overlay_mod.resolve_hotkey(self.settings)
             self.overlay_status_label.configure(
@@ -3682,8 +4084,7 @@ class TrackerApp:
             tk.Label(body, text="Press your shortcut now", bg=c["BG_TOP"],
                      fg=c["FG"], font=("Segoe UI Semibold", 14),
                      anchor="w").pack(fill="x", pady=(0, 8))
-            tk.Label(body, text="Hold at least one of Ctrl, Alt, or Shift, "
-                                "then press another key. Esc cancels.",
+            tk.Label(body, text="Hold Ctrl, Alt or Shift, then press a key. Esc cancels.",
                      bg=c["BG_TOP"], fg=c["FG_DIM"], font=("Segoe UI", 10),
                      anchor="w", justify="left", wraplength=324).pack(
                 fill="x", pady=(0, 16))
@@ -3734,8 +4135,7 @@ class TrackerApp:
                     return "break"
                 if not held:
                     error_label.configure(
-                        text="Hold Ctrl, Alt, or Shift too - a bare key isn't "
-                             "safe to use as a global shortcut.")
+                        text="Add Ctrl, Alt or Shift. A single key isn't a safe shortcut.")
                     return "break"
                 if event.keycode == 0:
                     error_label.configure(text="Didn't recognize that key - try another.")
@@ -3791,12 +4191,11 @@ class TrackerApp:
         c = self.colors
         if not self.settings.get("search_overlay_enabled"):
             self.search_overlay_status_label.configure(
-                text="Off. Turn on to look up players without leaving the game.",
+                text="Off.",
                 fg=c["FG_MUTED"])
         elif not overlay_mod.IS_WINDOWS:
             self.search_overlay_status_label.configure(
-                text="This build isn't running on Windows, so the global "
-                     "shortcut can't be registered here.", fg=c["NEGATIVE"])
+                text="Shortcuts only work on Windows.", fg=c["NEGATIVE"])
         elif self.search_hotkey_listener.is_registered():
             _, _, label = overlay_mod.resolve_hotkey(
                 self.settings, prefix="search", default_label="Ctrl+Shift+O")
@@ -3854,16 +4253,14 @@ class TrackerApp:
         c = self.colors
         if not startup_mod.IS_WINDOWS:
             self.startup_status_label.configure(
-                text="This build isn't running on Windows, so this can't "
-                     "register a startup entry here.", fg=c["NEGATIVE"])
+                text="Start with Windows is only available on Windows.", fg=c["NEGATIVE"])
         elif self.settings.get("start_on_boot") and not startup_mod.is_enabled():
             self.startup_status_label.configure(
-                text="Couldn't write the startup entry — this account may "
-                     "not have permission to. Nothing else is affected.",
+                text="Couldn't set this up. Your account may not allow it.",
                 fg=c["NEGATIVE"])
         elif self.settings.get("start_on_boot"):
             self.startup_status_label.configure(
-                text="Will launch automatically at Windows login.",
+                text="Starts with Windows.",
                 fg=c["POSITIVE"])
         else:
             self.startup_status_label.configure(text="Off.", fg=c["FG_MUTED"])
@@ -3882,8 +4279,7 @@ class TrackerApp:
         if enabled and not ok:
             messagebox.showerror(
                 "Couldn't enable startup",
-                "Windows didn't let this write to the startup registry "
-                "entry. This is sometimes restricted on managed/work "
+                "Windows blocked this change. It may be restricted on work "
                 "computers.", parent=self.root)
 
     def _on_start_minimized_toggle(self):
@@ -4097,9 +4493,7 @@ class TrackerApp:
             self.rpc_var.set(False)
             messagebox.showinfo(
                 "Discord RPC unavailable",
-                "delta_force_rpc.py is missing or pypresence isn't installed.\n\n"
-                "Install with:\n    pip install pypresence\n\n"
-                "Then set DISCORD_CLIENT_ID in delta_force_rpc.py.",
+                "Discord presence isn't available in this version.",
                 parent=self.root,
             )
             return
@@ -4108,8 +4502,7 @@ class TrackerApp:
             self.rpc_var.set(False)
             messagebox.showinfo(
                 "Discord RPC unavailable",
-                "pypresence isn't installed.\n\n"
-                "    pip install pypresence",
+                "Discord presence isn't available in this version.",
                 parent=self.root,
             )
             return
@@ -4128,9 +4521,7 @@ class TrackerApp:
                 self.rpc_var.set(False)
                 messagebox.showinfo(
                     "Discord RPC couldn't connect",
-                    f"{err}\n\n"
-                    "Is Discord running? Did you set DISCORD_CLIENT_ID "
-                    "in delta_force_rpc.py?",
+                    f"{err}\n\nIs Discord running?",
                     parent=self.root,
                 )
         else:
@@ -4187,6 +4578,35 @@ class TrackerApp:
                 self.msg_queue.put(("login_error", str(e)))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def start_native_login(self):
+        """Email/password login in-app (captcha shown only if the server
+        asks for it). On success the headless session capture runs, so the
+        rest of the app behaves exactly as after the browser login."""
+        if self._login_busy:
+            return
+        # Second layer behind the hidden button: also refuse here, so the
+        # server switch can't be bypassed by a stale window or shortcut.
+        if not self._email_login_allowed():
+            messagebox.showinfo("Email login", "Email login isn't available right now.\n"
+                                "Use Log In (browser) instead.")
+            return
+        native_ui.open_login_dialog(self.root, self.colors, self.msg_queue)
+
+    def _finish_native_login(self, payload):
+        """Email login done: install openid/token straight into core (the
+        stats API needs nothing else - no browser involved), then run the
+        same post-login flow as the browser login."""
+        sess = payload["session"]
+        try:
+            core.apply_native_session(
+                sess["openid"], sess["token"], expire=sess.get("expire"))
+        except Exception as e:
+            messagebox.showerror("Login failed", str(e))
+            self.set_status("Login failed.")
+            return
+        self._login_busy = True
+        self._on_login_done()
 
     def _startup_gate(self):
         """First thing after launch. Until the disclaimer has been
@@ -4345,13 +4765,11 @@ class TrackerApp:
 
             tk.Label(
                 body,
-                text="This is your first time logging in, so the tracker "
-                     "is pulling your complete match history from the "
-                     "server. Depending on how many matches you've "
-                     "played, this can take a little while.\n\n"
-                     "You can keep using the app while it finishes — "
-                     "watch the status bar in the bottom-left corner for "
-                     "progress.",
+                text="First login: pulling your full match history. This can take a "
+                     "few minutes.\n"
+                     "\n"
+                     "You can keep using the app. Progress shows in the status bar "
+                     "at the bottom left.",
                 bg=c["BG_TOP"], fg=c["FG_DIM"], font=("Segoe UI", 10),
                 anchor="w", justify="left", wraplength=364,
             ).pack(fill="x", pady=(0, 20))
@@ -4531,12 +4949,11 @@ class TrackerApp:
 
         if not messagebox.askyesno(
                 "Join the community leaderboard?",
-                "Want to share your stats with other opted-in Delta "
-                "Force Tracker players on a public leaderboard? This "
-                "only shares the aggregate numbers already on your "
-                "Overview tab, under your in-game nickname.\n\n"
-                "You can turn this on or off anytime from the "
-                "Community tab.", parent=self.root):
+                "Share your stats on the public leaderboard? Only the totals "
+                "from your Overview tab are shared, under your in-game "
+                "nickname.\n"
+                "\n"
+                "You can change this anytime in the Community tab.", parent=self.root):
             return
 
         nickname = None
@@ -4715,6 +5132,8 @@ class TrackerApp:
             self._render_profile()
         elif key == "maps":
             self._refresh_maps()
+        elif key == "operators":
+            self._refresh_operators()
         elif key == "matches":
             self._refresh_matches()
         elif key == "community":
@@ -5157,7 +5576,7 @@ class TrackerApp:
         tk.Label(header, text="EXTENDED STATS", bg=c["SURFACE"],
                  fg=c["FG_MUTED"], font=("Segoe UI", 9, "bold"),
                  anchor="w").pack(side="left")
-        tk.Label(header, text="deltaforceapi.com (third-party)",
+        tk.Label(header, text="Third-party data",
                  bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 8),
                  anchor="w").pack(side="left", padx=(8, 0))
 
@@ -5166,15 +5585,12 @@ class TrackerApp:
                      font=("Segoe UI", 9), anchor="w", justify="left",
                      wraplength=700).pack(fill="x", pady=(10, 0))
 
-        if not thirdparty_mod.is_configured():
-            note("Turned off. Add a deltaforceapi.com key as "
-                 "DELTAFORCEAPI_KEY in delta_force_config.py (add the line "
-                 "if it isn't there) to see bullets fired and hit, kills "
-                 "and deaths by tier, category scores and stash value here.")
+        if not thirdparty_mod.player_lookup_configured():
+            note("Extended stats aren't available in this version.")
             return
 
         if not self._thirdparty_warmup_responded:
-            note("Checking deltaforceapi.com for extended stats...")
+            note("Loading extended stats...")
             return
 
         # result None (no match for the name) and "found, but stats/stash
@@ -5189,14 +5605,10 @@ class TrackerApp:
         retrying = (self._thirdparty_warmup_inflight
                     or self._thirdparty_retry_after is not None)
         if retrying:
-            note("No extended stats yet. This service queues players it "
-                 "hasn't analyzed before, so this can take a few minutes "
-                 "the first time. Retrying automatically in the "
-                 "background.")
+            note("No extended stats yet.")
         else:
-            note("No extended stats right now - the service may be down "
-                 "or still processing your account. Use \"Refresh "
-                 "Profile\" in Settings to try again.")
+            note("Extended stats aren't available right now. Try \"Refresh "
+                 "Profile\" in Settings.")
 
     def _update_sidebar_profile(self):
         c = self.colors
@@ -5221,18 +5633,13 @@ class TrackerApp:
                 pass
 
         if hasattr(self, "sidebar_creds"):
-            src = core.credential_source()
-            if src == "not logged in":
-                self.sidebar_creds.configure(
-                    text="Not logged in — click Log In above.")
+            if core.credential_source() == "not logged in":
+                self.sidebar_creds.configure(text="Game login: not signed in")
             else:
-                self.sidebar_creds.configure(text=f"Creds: {src}")
+                self.sidebar_creds.configure(text="Game login: signed in")
 
         if hasattr(self, "login_btn"):
-            if logged_in:
-                self.login_btn.configure(bg=c["SURFACE_ALT"], fg=c["FG"])
-            else:
-                self.login_btn.configure(bg=c["ACCENT"], fg=c["BG_BOTTOM"])
+            self.login_btn.set_variant(primary=not logged_in)
 
     # ------------------------------------------------------------------
     # Match detail modal
@@ -5301,14 +5708,7 @@ class TrackerApp:
                  bg=c["BG_TOP"], fg=c["FG_MUTED"],
                  font=("Segoe UI", 11), pady=60, padx=40).pack(fill="x")
 
-        def _on_wheel(e):
-            try:
-                canvas.yview_scroll(int(-e.delta / 120), "units")
-            except tk.TclError:
-                pass
-            return "break"
-
-        win.bind("<MouseWheel>", _on_wheel)
+        bind_mousewheel_to_canvas(canvas)
 
         def close():
             self._close_detail(room_id)
@@ -5418,7 +5818,7 @@ class TrackerApp:
                     self._populate_detail(win, inner, rr, canvas)
 
                 retry_btn = tk.Label(err_card.body, text="Retry", bg=c["ACCENT"],
-                                     fg=c["BG_BOTTOM"], font=("Segoe UI Semibold", 10),
+                                     fg=c["ACCENT_FG"], font=("Segoe UI Semibold", 10),
                                      padx=18, pady=8, cursor="hand2")
                 retry_btn.pack(anchor="w")
                 retry_btn.bind("<Button-1>", _retry)
@@ -5539,7 +5939,7 @@ class TrackerApp:
         close_row = tk.Frame(inner, bg=c["BG_TOP"])
         close_row.pack(fill="x", padx=32, pady=(8, 32))
         close_btn = tk.Label(close_row, text="Close", bg=c["ACCENT"],
-                             fg=c["BG_BOTTOM"],
+                             fg=c["ACCENT_FG"],
                              font=("Segoe UI Semibold", 10),
                              padx=24, pady=10, cursor="hand2")
         close_btn.pack(side="right")
@@ -5874,8 +6274,7 @@ class TrackerApp:
         if not comm.SERVER_URL:
             messagebox.showinfo(
                 "Not configured",
-                "This build isn't pointed at a community server yet. "
-                "See server/README.md.", parent=self.root)
+                "Community features aren't available in this version.", parent=self.root)
             return
         self._set_community_busy(True)
         self.set_status("Joining the community leaderboard…")
@@ -5915,9 +6314,8 @@ class TrackerApp:
             return
         if not messagebox.askyesno(
                 "Leave leaderboard",
-                "This removes your stats from the community server "
-                "entirely and forgets your leaderboard entry on this "
-                "device. Continue?", parent=self.root):
+                "This removes your stats from the community server and unlinks "
+                "this device. Continue?", parent=self.root):
             return
         self._set_community_busy(True)
         threading.Thread(target=self._community_unlink_worker, daemon=True).start()
@@ -6058,12 +6456,10 @@ class TrackerApp:
                      anchor="w", wraplength=384, justify="left").pack(
                 fill="x", pady=(0, 12))
             tk.Label(body,
-                     text="You're currently sharing your stats on the "
-                          "public leaderboard. That now also includes your "
-                          "recent matches (up to your last 200), visible to "
-                          "anyone who clicks your name there - not just the "
-                          "summary numbers as before.\n\n"
-                          "Keep sharing under the new terms, or stop?",
+                     text="You're on the public leaderboard. It now also shows your "
+                          "recent matches (last 200) to anyone who clicks your name.\n"
+                          "\n"
+                          "Keep sharing, or stop?",
                      bg=c["BG_TOP"], fg=c["FG_DIM"], font=("Segoe UI", 10),
                      anchor="w", justify="left", wraplength=384).pack(
                 fill="x", pady=(0, 20))
@@ -6213,8 +6609,7 @@ class TrackerApp:
             tk.Label(body, text=f"Version {version} is ready to install",
                      bg=c["BG_TOP"], fg=c["FG"], font=("Segoe UI Semibold", 14),
                      anchor="w").pack(fill="x", pady=(0, 12))
-            tk.Label(body, text="The app will close and reopen automatically. "
-                                "This only takes a few seconds.",
+            tk.Label(body, text="The app will restart in a few seconds.",
                      bg=c["BG_TOP"], fg=c["FG_DIM"], font=("Segoe UI", 10),
                      anchor="w", justify="left", wraplength=364).pack(
                 fill="x", pady=(0, 20))
@@ -6250,7 +6645,55 @@ class TrackerApp:
         except updater_mod.UpdateError as e:
             messagebox.showerror("Couldn't start the update", str(e), parent=self.root)
             return
+        self._arm_exit_watchdog()
         self._on_close()  # normal clean shutdown; the launched script relaunches us
+
+    def _arm_exit_watchdog(self, seconds: float = 4.0):
+        """Backstop for the update path only: if the process is still alive
+        a few seconds after the normal shutdown has run, end it.
+
+        The installer script waits for this process to be gone before
+        starting the new version. _on_close() stops everything this app
+        starts itself, but a library's own background thread (a tray icon,
+        a Discord connection) could in principle keep the interpreter alive
+        after the window is destroyed - and then the update would sit
+        waiting on a process that never ends. A daemon timer can't itself
+        keep the process alive, and by this point settings are saved and
+        every listener stopped, so a hard exit loses nothing.
+        """
+        timer = threading.Timer(seconds, lambda: os._exit(0))
+        timer.daemon = True
+        timer.start()
+
+    def _post_update_housekeeping(self):
+        """Runs shortly after every start. Tidies leftovers from a previous
+        update (the renamed-aside old exe, stale helper scripts and
+        staging folders), and - the part that matters - tells the person if
+        the LAST update didn't install. Without this a failed update looked
+        exactly like the update never having been attempted."""
+        try:
+            updater_mod.cleanup_leftovers()
+        except Exception:
+            pass
+        try:
+            failed = updater_mod.consume_failure_marker()
+        except Exception:
+            failed = False
+        if not failed:
+            return
+        log = None
+        try:
+            log = updater_mod.latest_update_log()
+        except Exception:
+            pass
+        where = f"\n\nA log of what happened was saved here:\n{log}" if log else ""
+        messagebox.showwarning(
+            "Update didn't install",
+            "The last update couldn't be installed, so you're still on the "
+            "previous version - nothing was lost." + where +
+            "\n\nYou can download the latest version manually from the "
+            "project's GitHub releases page.",
+            parent=self.root)
 
     def _update_check_worker(self, manual: bool):
         status, detail = comm.check_for_update_status()
@@ -6342,6 +6785,20 @@ class TrackerApp:
                     self.set_status(f"Backfill complete: {payload}")
                     if self.active_section == "matches":
                         self._refresh_matches()
+                elif kind == "accounts_changed":
+                    self._on_accounts_changed()
+                elif kind == "account_signin_done":
+                    self._account_busy = False
+                    self._on_accounts_changed()
+                    if payload != "cancelled":
+                        name = self.accounts.status().get("name") or "your account"
+                        self.set_status(f"Signed in as {name}.")
+                elif kind == "account_signin_error":
+                    self._account_busy = False
+                    self._on_accounts_changed()
+                    messagebox.showerror("Sign-in", payload)
+                elif kind == "native_login_done":
+                    self._finish_native_login(payload)
                 elif kind == "login_done":
                     self._on_login_done()
                 elif kind == "login_error":
@@ -6389,8 +6846,7 @@ class TrackerApp:
                     self._refresh_community_status_ui()
                     messagebox.showinfo("Community link expired", payload,
                                         parent=self.root)
-                    self.set_status("Community link expired — click "
-                                    "\"Join Leaderboard\" to relink.")
+                    self.set_status("Community link expired. Click Join Leaderboard to relink.")
                 elif kind == "community_unlink_done":
                     self._set_community_busy(False)
                     self._community_status = None
@@ -6444,12 +6900,10 @@ class TrackerApp:
                     try:
                         if status == "not_configured":
                             self.search_overlay.show_error(
-                                "Player Lookup isn't set up - add a "
-                                "deltaforceapi.com key in Settings > "
-                                "delta_force_config.py.")
+                                "Player Lookup isn't available in this version.")
                         elif result is None:
                             self.search_overlay.show_error(
-                                f"No player found for \"{searched_name}\".")
+                                thirdparty_mod.failure_message(searched_name))
                         else:
                             self.search_overlay.show_result(result)
                     except Exception:
@@ -6481,12 +6935,11 @@ class TrackerApp:
                                 fg=self.colors["POSITIVE"])
                         elif status == "failed":
                             self.update_status_label.configure(
-                                text=f"Couldn't check for updates ({detail}). "
-                                     "Check UPDATE_INFO_URL in delta_force_config.py.",
+                                text="Couldn't check for updates. Try again later.",
                                 fg=self.colors["NEGATIVE"])
                         else:
                             self.update_status_label.configure(
-                                text="Update checking isn't set up in this build.",
+                                text="Updates aren't available in this version.",
                                 fg=self.colors["FG_MUTED"])
                 elif kind == "update_download_progress":
                     downloaded, total = payload
@@ -6551,6 +7004,8 @@ class TrackerApp:
             return "normal" if not flag else "disabled"
 
         self.login_btn.set_state(state(self._login_busy))
+        if hasattr(self, "native_login_btn"):
+            self.native_login_btn.set_state(state(self._login_busy))
         self.refresh_btn.set_state(state(self.match_busy))
         self.refresh_all_btn.set_state(state(self.match_busy))
         self.refresh_profile_btn.set_state(state(self.profile_busy))
@@ -6629,7 +7084,7 @@ class TrackerApp:
                          args=(name,), daemon=True).start()
 
     def _overlay_search_worker(self, name: str):
-        if not thirdparty_mod.is_configured():
+        if not thirdparty_mod.player_lookup_configured():
             self.msg_queue.put(("overlay_search_done",
                                (name, "not_configured", None)))
             return
@@ -6734,6 +7189,15 @@ def _remove_startup_and_exit():
 
 
 def main():
+    # Captcha helper window (spawned by delta_force_native_login as a
+    # subprocess so pywebview owns its own main thread). Must run before
+    # any Tk code.
+    if len(sys.argv) >= 3 and sys.argv[1] == "--captcha":
+        import delta_force_native_login as _nl
+        _nl._captcha_window_main(
+            sys.argv[2], invisible="invisible" in sys.argv[3:])
+        return
+
     if "--remove-startup" in sys.argv:
         _remove_startup_and_exit()
         return

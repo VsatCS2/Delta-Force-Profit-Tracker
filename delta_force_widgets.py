@@ -46,23 +46,103 @@ class _Debouncer:
 # =====================================================================
 # Mousewheel scrolling for a scrollable Canvas
 # =====================================================================
-def bind_mousewheel_to_canvas(canvas):
-    """Lets the mouse wheel scroll a canvas while the pointer is over it,
-    without permanently stealing wheel events from the rest of the app.
-    Binds on <Enter> and unbinds on <Leave> rather than binding once and
-    leaving it - Tkinter's bind_all wheel binding is global to the whole
-    application, so a permanent binding would scroll whichever canvas
-    last called this, regardless of where the mouse actually is.
+# Mouse-wheel routing
+#
+# ONE handler for the whole app. The previous approach (bind_all on a canvas's
+# <Enter>, unbind on <Leave>) broke whenever scrollables were nested - e.g. a
+# list inside a scrolling page: the list scrolled via Tk's own class binding
+# AND the page's wheel handler fired too, so both moved at once (and moving
+# between them left stale bindings behind).
+#
+# Now: find the widget under the pointer, walk up to the NEAREST scrollable
+# (a registered canvas, Treeview, Listbox or Text), scroll only that one, and
+# stop. If the inner list is at its end it just stops (no page jumping); if it
+# has nothing to scroll (all rows fit) the wheel falls through to the page.
+# Dropdowns never change value from the wheel. Fractional deltas from
+# precision touchpads are accumulated, so they scroll smoothly.
+# =====================================================================
+_WHEEL_UNITS = {"canvas": 1, "tree": 3, "list": 3, "text": 3}
+_wheel_acc = {}
 
-    Canvas is the one Tk scrollable container that needs this manually -
-    Treeview, Listbox, and Text already get mousewheel scrolling for
-    free from Tk's own default bindings.
-    """
-    def _on_wheel(event):
-        canvas.yview_scroll(
-            -1 * (event.delta // 120 or (1 if event.delta > 0 else -1)), "units")
-    canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_wheel))
-    canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+def _wheel_kind(w):
+    if getattr(w, "_df_wheel", False):
+        return "canvas"
+    try:
+        cls = w.winfo_class()
+    except tk.TclError:
+        return None
+    return {"Treeview": "tree", "Listbox": "list", "Text": "text"}.get(cls)
+
+
+def _has_range(w):
+    try:
+        first, last = w.yview()
+    except (tk.TclError, TypeError, ValueError):
+        return False
+    return first > 1e-6 or last < 1.0 - 1e-6
+
+
+def _can_move(w, steps):
+    first, last = w.yview()
+    return first > 1e-6 if steps > 0 else last < 1.0 - 1e-6
+
+
+def _wheel_dispatch(event):
+    try:
+        app = event.widget._root()
+        target = app.winfo_containing(event.x_root, event.y_root) or event.widget
+    except (KeyError, tk.TclError, AttributeError):
+        return None
+    delta = getattr(event, "delta", 0) or 0
+    if not delta:
+        return "break"
+    steps = delta / 120.0
+    node = target
+    while node is not None:
+        kind = _wheel_kind(node)
+        if kind and _has_range(node):
+            if _can_move(node, steps):
+                acc = _wheel_acc.get(str(node), 0.0) + steps * _WHEEL_UNITS[kind]
+                whole = int(acc)
+                _wheel_acc[str(node)] = acc - whole
+                if whole:
+                    try:
+                        node.yview_scroll(-whole, "units")
+                    except tk.TclError:
+                        pass
+            return "break"          # at the end (or scrolled): never chain
+        if isinstance(node, (tk.Toplevel, tk.Tk)):
+            break                   # don't leak from a popup into the main page
+        try:
+            node = node.master
+        except AttributeError:
+            break
+    return "break"
+
+
+def _install_wheel_router(widget):
+    app = widget._root()
+    if getattr(app, "_df_wheel_router", False):
+        return
+    app._df_wheel_router = True
+    app.bind_all("<MouseWheel>", _wheel_dispatch)
+    # Replace Tk's own wheel handling for these classes so they don't ALSO
+    # scroll (or, for combo boxes, change their selected value).
+    for cls in ("Treeview", "Listbox", "Text", "Canvas", "TCombobox", "TSpinbox"):
+        app.bind_class(cls, "<MouseWheel>", _wheel_dispatch)
+
+
+def bind_mousewheel_to_canvas(canvas):
+    """Make `canvas` scroll with the mouse wheel (nearest-scrollable wins).
+    Treeview/Listbox/Text need no registration - the router handles them."""
+    canvas._df_wheel = True
+    _install_wheel_router(canvas)
+
+
+def install_mousewheel_routing(window):
+    """Call once on the root so lists work even if no canvas registered yet."""
+    _install_wheel_router(window)
 
 
 # =====================================================================

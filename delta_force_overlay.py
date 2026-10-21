@@ -484,9 +484,8 @@ class SearchOverlayWindow:
     def show_result(self, result: dict):
         """A condensed version of the main app's Player Lookup card -
         enough to glance at during downtime, not the full page. Name,
-        levels, and the stats/stash numbers most worth a quick check
-        (K/D, extraction rate, net stash) rather than all ten fields the
-        full page shows."""
+        levels, K/D overall and by difficulty (easy / normal / hard),
+        extraction rate, current rank, and net stash."""
         if not self.is_visible():
             return
         import delta_force_core as core
@@ -513,7 +512,8 @@ class SearchOverlayWindow:
             # service's own queue-based design produces, so it's worth
             # naming rather than leaving this looking like a bare failure.
             tk.Label(self._results_frame,
-                     text="No stats yet - this service queues players "
+                     text=result.get("_no_stats_note") or
+                          "No stats yet - this service queues players "
                           "it hasn't seen before. Try again in a bit.",
                      bg=c["SURFACE"], fg=c["FG_MUTED"], font=("Segoe UI", 9),
                      anchor="w", justify="left",
@@ -523,21 +523,50 @@ class SearchOverlayWindow:
 
         grid = tk.Frame(self._results_frame, bg=c["SURFACE"])
         grid.pack(fill="x", pady=(8, 0))
-        cells = []
+
+        def tier_kd(label, key):
+            kills = stats.get(f"kills_{key}", 0)
+            deaths = stats.get(f"deaths_{key}", 0)
+            if not (kills or deaths):
+                return (label, "-", c["FG_MUTED"], "")
+            ratio = stats.get(f"kd_ratio_{key}", 0.0)
+            return (label, f"{ratio:.2f}",
+                    c["POSITIVE"] if ratio >= 1 else c["NEGATIVE"], "")
+
+        rows = []
         if stats:
-            cells.append(("K/D", f"{stats['kd_ratio']:.2f}"))
-            cells.append(("EXTRACT", f"{stats['extraction_rate'] * 100:.0f}%"))
-            cells.append(("HEADSHOT", f"{stats['headshot_rate'] * 100:.0f}%"))
+            points = stats.get("ranked_points") or 0
+            peak = stats.get("ranked_points_peak") or 0
+            tier = result.get("rank_tier") or ""
+            if points:
+                rank_text = f"{tier} {points:,}".strip()
+            else:
+                rank_text = "-"
+            rows.append([
+                ("K/D", f"{stats.get('kd_ratio', 0):.2f}", c["FG"], ""),
+                ("EXTRACT", f"{stats.get('extraction_rate', 0) * 100:.0f}%", c["FG"], ""),
+                ("RANK", rank_text, c["FG"],
+                 f"peak {peak:,}" if peak > points else ""),
+            ])
+            rows.append([tier_kd("EASY K/D", "easy"),
+                         tier_kd("NORMAL K/D", "medium"),
+                         tier_kd("HARD K/D", "hard")])
         if stash:
-            cells.append(("NET STASH", core.fmt_money(stash.get("net", 0))))
-        for i, (label, value) in enumerate(cells):
-            col = tk.Frame(grid, bg=c["SURFACE"])
-            col.grid(row=i // 2, column=i % 2, sticky="w",
-                    padx=(0, 20), pady=(0, 6))
-            tk.Label(col, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
-                     font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x")
-            tk.Label(col, text=value, bg=c["SURFACE"], fg=c["FG"],
-                     font=("Segoe UI Semibold", 12), anchor="w").pack(fill="x")
+            rows.append([("NET STASH", core.fmt_money(stash.get("net", 0)),
+                          c["FG"], "")])
+        for r, row_cells in enumerate(rows):
+            for col, (label, value, color, caption) in enumerate(row_cells):
+                cell = tk.Frame(grid, bg=c["SURFACE"])
+                cell.grid(row=r, column=col, sticky="nw", padx=(0, 18),
+                          pady=(0, 6),
+                          columnspan=3 if len(row_cells) == 1 else 1)
+                tk.Label(cell, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                         font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x")
+                tk.Label(cell, text=value, bg=c["SURFACE"], fg=color,
+                         font=("Segoe UI Semibold", 12), anchor="w").pack(fill="x")
+                if caption:
+                    tk.Label(cell, text=caption, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                             font=("Segoe UI", 8), anchor="w").pack(fill="x")
         self._resize_to_content()
 
     def _set_status(self, text, color):

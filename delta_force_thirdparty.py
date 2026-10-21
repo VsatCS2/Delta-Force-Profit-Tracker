@@ -34,6 +34,11 @@ try:
 except ImportError:
     _CFG_KEY = ""
 
+try:
+    import delta_force_playerapi as _playerapi
+except ImportError:
+    _playerapi = None
+
 API_BASE = "https://api.deltaforceapi.com/deltaforceapi.gateway.ApiService"
 _REQUEST_TIMEOUT_SECONDS = 10
 
@@ -48,7 +53,37 @@ _cache = {}  # name.lower() -> (fetched_at, result_dict_or_None)
 
 
 def is_configured() -> bool:
+    """Old gateway key present - still what item search / price alerts use."""
     return bool(_CFG_KEY)
+
+
+def uses_new_player_api() -> bool:
+    return bool(_playerapi and _playerapi.is_configured())
+
+
+def retry_worthwhile() -> bool:
+    """The old service queued unseen players ("check back in a few
+    minutes"), so empty results were retried on a backoff. The new API
+    answers immediately - an empty result is final, and retrying only
+    spends paid requests."""
+    return not uses_new_player_api()
+
+
+def auto_warmup_allowed() -> bool:
+    return (not uses_new_player_api()) or _playerapi.auto_warmup_enabled()
+
+
+def failure_message(name: str) -> str:
+    """Why the last search_player() came back empty, in plain words."""
+    if uses_new_player_api():
+        return _playerapi.failure_message(name)
+    return f'No player found for "{name}".'
+
+
+def player_lookup_configured() -> bool:
+    """Player Lookup works with either the new player API (proxy or direct)
+    or the old gateway key."""
+    return bool(_CFG_KEY) or bool(_playerapi and _playerapi.is_configured())
 
 
 def _headers() -> dict:
@@ -141,6 +176,13 @@ def search_player(name_or_id: str, use_cache: bool = True):
     """
     if not name_or_id or not name_or_id.strip():
         return None
+
+    # New player API first (fast, 2 parallel calls). Falls through to the
+    # old gateway only if that's also configured.
+    if _playerapi and _playerapi.is_configured():
+        res = _playerapi.search_player(name_or_id, use_cache=use_cache)
+        if res or not _CFG_KEY:
+            return res
 
     key = name_or_id.strip().lower()
     if use_cache and key in _cache:

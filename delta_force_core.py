@@ -115,13 +115,47 @@ def _resolve_credentials(endpoint: str) -> dict:
     fallback suddenly causing failures, not as a silent data problem.
     """
     own = _CRED_BLOCKS_BY_ENDPOINT.get(endpoint)
-    if own and own.get("openid") and own.get("token") and own.get("s"):
+    if own and own.get("openid") and own.get("token"):
         return own
     for name in _CRED_FALLBACK_ORDER:
         block = _CRED_BLOCKS_BY_ENDPOINT.get(name)
-        if block and block.get("openid") and block.get("token") and block.get("s"):
+        if block and block.get("openid") and block.get("token"):
             return block
     return own or _empty_creds()
+
+
+def _signing_params(c: dict) -> dict:
+    """u/a/ts/s are only sent when a browser capture supplied a signature.
+    The API accepts requests with just openid/token + the static fields
+    (verified live), which is what email login produces."""
+    if c.get("s"):
+        return {"u": c["u"], "a": c["a"], "ts": c["ts"], "s": c["s"]}
+    return {}
+
+
+def apply_native_session(openid: str, token: str, expire=None,
+                         game_id: str = "29158", channel: str = "131") -> None:
+    """Install credentials obtained by the in-app email login (no browser).
+
+    Writes dftools_creds.json in the same shape a capture would, so the
+    saved session survives restarts, then reloads it. Any signature left
+    over from an earlier browser login is cleared first - a stale `s`
+    signed for a different token must never be mixed with this one."""
+    if not (openid and token):
+        raise ValueError("openid and token are required")
+    params = {"openid": str(openid), "token": str(token),
+              "game_id": str(game_id), "channel": str(channel),
+              "account_type": 1, "lang_type": "en"}
+    data = {name: {"endpoint": name, "params": dict(params)}
+            for name in ("matchlist", "mydata", "matchdetail",
+                         "assetcalendar", "weeklyreport")}
+    data["_native"] = {"expire": expire}
+    DFTOOLS_CREDS_FILE.write_text(json.dumps(data, indent=2))
+    for block in _ALL_CRED_BLOCKS:
+        block.clear()
+        block.update(_empty_creds())
+    _dftools_state["headers_by_endpoint"] = {}
+    refresh_credentials_from_browser(force=True)
 
 
 def have_credentials(endpoint: str = "matchlist") -> bool:
@@ -129,7 +163,7 @@ def have_credentials(endpoint: str = "matchlist") -> bool:
     own credentials were captured, or another endpoint's were (see
     _resolve_credentials)."""
     c = _resolve_credentials(endpoint)
-    return bool(c.get("openid") and c.get("token") and c.get("s"))
+    return bool(c.get("openid") and c.get("token"))
 
 
 def current_openid() -> str:
@@ -159,11 +193,7 @@ def require_credentials(endpoint: str) -> None:
     if have_credentials(endpoint):
         return
     raise NotLoggedInError(
-        "You're not logged in yet. Run the login flow first:\n"
-        "  CLI:  python delta_force_cli.py --login\n"
-        "  GUI:  click the 'Log In (browser)' button in the right sidebar.\n\n"
-        "A browser window will open - log in, and the tool will pick up "
-        "your session automatically from there."
+        "You're not logged in. Use Log In on the right to sign in."
     )
 
 
@@ -862,10 +892,8 @@ def _handle_json_response(resp, dbg):
         )
     if code != 0:
         raise RuntimeError(
-            f"API returned an error (code={code}, "
-            f"msg={payload.get('msg')}, http={resp.status_code}). "
-            "Your credentials may have expired — open the browser login "
-            "(--login / Log In button) for fresh credentials."
+            f"The server returned an error (code {code}). Your login may "
+            "have expired - log in again from the right side."
         )
     return payload["data"]
 
@@ -914,7 +942,7 @@ def fetch_page(page: int, page_size: int = PAGE_SIZE, on_debug=None) -> dict:
     params = {
         "openid": c["openid"], "token": c["token"], "game_id": c["game_id"],
         "channel": c["channel"], "account_type": c["account_type"], "lang_type": c["lang_type"],
-        "u": c["u"], "a": c["a"], "ts": c["ts"], "s": c["s"],
+        **_signing_params(c),
     }
     body = {
         "needLogin": True, "map_id": [], "show_net_income": True,
@@ -959,7 +987,7 @@ def fetch_my_data(on_debug=None) -> dict:
     params = {
         "openid": c["openid"], "token": c["token"], "game_id": c["game_id"],
         "channel": c["channel"], "account_type": c["account_type"], "lang_type": c["lang_type"],
-        "u": c["u"], "a": c["a"], "ts": c["ts"], "s": c["s"],
+        **_signing_params(c),
     }
     body = {
         "needLogin": True, "seasonno": SEASON_IDS, "report_type": 1,
@@ -987,7 +1015,7 @@ def fetch_asset_calendar(on_debug=None) -> dict:
     params = {
         "openid": c["openid"], "token": c["token"], "game_id": c["game_id"],
         "channel": c["channel"], "account_type": c["account_type"], "lang_type": c["lang_type"],
-        "u": c["u"], "a": c["a"], "ts": c["ts"], "s": c["s"],
+        **_signing_params(c),
     }
     body = {
         "needLogin": True,
@@ -1030,7 +1058,7 @@ def fetch_match_detail(room_id: str, on_debug=None) -> dict:
     params = {
         "openid": c["openid"], "token": c["token"], "game_id": c["game_id"],
         "channel": c["channel"], "account_type": c["account_type"], "lang_type": c["lang_type"],
-        "u": c["u"], "a": c["a"], "ts": c["ts"], "s": c["s"],
+        **_signing_params(c),
     }
     body = {
         "needLogin": True, "room_id": str(room_id), "report_type": 1,
@@ -1122,7 +1150,7 @@ def backfill_details(on_progress=None, on_debug=None, should_stop=None) -> int:
             time.sleep(REQUEST_DELAY_SECONDS)
 
     if not stopped():
-        extra = (f" ({rate_limit_hits} rate-limit hit(s) — re-run to retry)"
+        extra = (f" ({rate_limit_hits} request(s) were delayed - run it again to finish)"
                  if rate_limit_hits else "")
         prog(f"Backfill finished: {count}/{total} fetched{extra}.")
     return count
@@ -1202,7 +1230,7 @@ def pull_matches(refresh_all: bool = False, on_progress=None, on_debug=None,
     if failed_pages:
         pages_str = ", ".join(str(p) for p in failed_pages)
         prog(f"Done with {len(failed_pages)} failed page(s) ({pages_str}). "
-             f"Re-run Full Refresh in a minute to fill the gaps.")
+             f"Run it again in a minute to fill the gaps.")
     else:
         prog(f"Done. {new_count} new match(es) fetched, "
              f"{len(cache['matches'])} total in cache.")

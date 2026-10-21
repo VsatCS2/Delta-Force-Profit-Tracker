@@ -22,23 +22,24 @@ Splits into three steps with a hard boundary between them:
                            install directory, and only after the caller
                            has gotten explicit confirmation from the user
 
-That last step can't just overwrite the running .exe directly - Windows
-keeps an open file locked while it's executing. The standard way around
-this (used by most self-updating Windows software that doesn't ship a
-separate installer): write a small batch script that waits for this
-process to exit, THEN copies the new files over the old ones and
-relaunches, launch it detached so it survives this process ending, and
-exit. No new compiled binary, no separate updater .exe to maintain or
-get flagged by antivirus on its own - a batch script performing "wait,
-copy, relaunch" is about as unremarkable as file operations get.
+That last step can't just overwrite the running .exe - Windows keeps an
+open file locked while it executes. But it DOES allow renaming one, which
+is the whole trick: a small helper script (see INSTALL_SCRIPT) waits a
+bounded time for this process to exit, renames the old exe to <name>.old,
+copies the new files in under the real name, and starts the new version -
+and if anything goes wrong it puts the old exe back, restarts it, and
+leaves a marker so the app can tell the person on its next start.
+Renaming instead of waiting for the file to unlock matters because a
+PyInstaller onefile build keeps a second bootloader process holding the
+exe open for a moment after the app itself has exited, so "wait until it's
+free" is unreliable in exactly the build this ships as.
 
-The wait itself is two-phase, not a single check (see
-build_install_script's docstring for the full reasoning): a quick PID
-check first, then the actual file copy is retried until it succeeds or
-a timeout passes, rather than trusting the PID check alone to mean the
-file lock is really gone. The script also logs each phase with a
-timestamp to %TEMP%, so a failed update leaves real evidence instead of
-silently doing nothing.
+Things that went wrong in earlier versions, and are handled on purpose:
+the helper used to be launched DETACHED_PROCESS, which gives cmd no
+console, so every tool it ran opened its own visible console window
+(see _spawn_hidden); and it inherited this app's PyInstaller environment
+variables, which can stop the relaunched exe from starting (see
+clean_pyinstaller_env).
 
 Windows-only, like delta_force_overlay.py/delta_force_startup.py -
 importing this on another OS works fine, but every function here is
@@ -47,13 +48,17 @@ launch_installer_and_exit's docstring for why "frozen" matters too).
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
 import requests
+
+from delta_force_paths import APP_DATA_DIR
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -167,106 +172,199 @@ def _find_staged_root(staging: Path, expected_exe_name: str) -> Path:
     raise UpdateError(f"{expected_exe_name} not found in the staged update.")
 
 
-def build_install_script(staged_root: Path, install_dir: Path,
-                         exe_name: str, pid: int) -> Path:
-    """Writes the batch script that performs the actual update once this
-    process has exited, and returns its path. Doesn't run it - see
-    launch_installer_and_exit.
+# ---------------------------------------------------------------------
+# Applying the update
+# ---------------------------------------------------------------------
 
-    Two-phase wait, not just a PID check: first, a quick (up to ~15s)
-    wait for the known PID to leave tasklist - fast in the common case.
-    Then, regardless of whether that loop found the PID gone or timed
-    out, the actual file copy is retried (up to ~20s) until it succeeds.
-    That second phase is what actually matters: a process disappearing
-    from tasklist doesn't guarantee Windows has released its file
-    handles that same instant (antivirus scanning a freshly-closed exe
-    is one realistic source of a few extra seconds of lock), and this
-    app is built as a PyInstaller --onefile exe, where I can't fully
-    verify from outside Windows whether the PID this script is told to
-    wait for is always exactly the one holding the lock. Retrying the
-    copy itself sidesteps needing that guarantee - it directly tests the
-    actual precondition (can we write these files yet?) instead of a
-    proxy for it.
+# Written by the install script if an update couldn't be applied, read (and
+# deleted) by the app on its next start so the failure is SHOWN to the
+# person instead of the update just quietly not happening.
+FAIL_MARKER = APP_DATA_DIR / "update_failed.txt"
 
-    Logs every step with a timestamp to %TEMP%\\dftracker_update_<pid>.log,
-    so a failed update leaves real evidence instead of nothing - if this
-    is ever still unreliable, that log is what would show which phase
-    actually failed, rather than guessing again.
+_SCRIPT_GLOB = "dftracker_update_*.bat"
+_LOG_GLOB = "dftracker_update_*.log"
 
-    Every path is double-quoted throughout: both staged_root and
-    install_dir can and often do contain spaces (a real reported install
-    lived under "...\\DF Stats\\Public Release\\"), and an unquoted path
-    with a space silently truncates at the first one in batch, which
-    would make this copy from or to the wrong place instead of failing
-    loudly.
-    """
-    script_path = Path(tempfile.gettempdir()) / f"dftracker_update_{pid}.bat"
-    log_path = Path(tempfile.gettempdir()) / f"dftracker_update_{pid}.log"
-    # /FI "PID eq N" is the documented tasklist filter for matching a
-    # specific process id; find against the header-less CSV output (/NH)
-    # is the standard idiom for "is this PID still running".
-    script = f'''@echo off
-setlocal enabledelayedexpansion
-set "SRC={staged_root}"
-set "DEST={install_dir}"
-set "LOG={log_path}"
+# The helper script. Static text: every input arrives as a DFT_* environment
+# variable set by launch_installer_and_exit, so nothing in here depends on
+# path text, quoting, or the console code page (a username with an accent or
+# an & in it can't break it), and the file is plain ASCII.
+#
+# Deliberately flat - labels and goto, no ( ) blocks, no delayed expansion:
+# a path containing ! or ) breaks either of those.
+#
+# The key idea: Windows won't let you OVERWRITE a running .exe, but it does
+# let you RENAME one. So instead of waiting for the old exe to unlock (which
+# a PyInstaller onefile build makes unreliable - a second bootloader process
+# keeps the file open for a moment after the app itself has exited), the old
+# exe is renamed to <name>.old, the new files are copied in under the real
+# name, and the new version is started. If anything fails, the old exe is
+# put back and restarted, and a marker file tells the app to say so.
+INSTALL_SCRIPT = r"""@echo off
+rem Delta Force Tracker self-update helper (written by delta_force_updater.py).
+rem Inputs: DFT_PID DFT_EXE DFT_SRC DFT_STAGING DFT_DEST DFT_LOG DFT_FAIL
+rem Optional: DFT_MAX_WAITS DFT_MAX_TRIES (retry limits, for testing).
 
-echo [%date% %time%] Update script started. PID={pid} > "%LOG%" 2>&1
+if "%DFT_MAX_WAITS%"=="" set DFT_MAX_WAITS=30
+if "%DFT_MAX_TRIES%"=="" set DFT_MAX_TRIES=20
 
-set /a waits=0
+call :log "Update started. Waiting for process %DFT_PID% to exit."
+set WAITS=0
+
 :waitloop
-tasklist /FI "PID eq {pid}" /NH 2>NUL | find "{pid}" >NUL
-if "%ERRORLEVEL%"=="0" (
-    set /a waits+=1
-    if !waits! GEQ 15 goto copyloop
-    timeout /t 1 /nobreak >NUL
-    goto waitloop
-)
-echo [%date% %time%] Original process no longer listed after !waits!s. >> "%LOG%" 2>&1
+tasklist /FI "PID eq %DFT_PID%" /NH 2>NUL | find "%DFT_PID%" >NUL
+if errorlevel 1 goto exited
+set /a WAITS+=1
+if %WAITS% GEQ %DFT_MAX_WAITS% goto waitgaveup
+ping -n 2 127.0.0.1 >NUL
+goto waitloop
 
-set /a tries=0
+:waitgaveup
+call :log "Gave up waiting for the old process. Continuing anyway - a running exe can still be renamed."
+goto swap
+
+:exited
+call :log "Old process has exited."
+
+:swap
+if not exist "%DFT_DEST%\%DFT_EXE%" goto moved
+set TRIES=0
+
+:moveloop
+move /Y "%DFT_DEST%\%DFT_EXE%" "%DFT_DEST%\%DFT_EXE%.old" >> "%DFT_LOG%" 2>&1
+if not errorlevel 1 goto moved
+set /a TRIES+=1
+call :log "Could not move the old exe aside - attempt %TRIES%."
+if %TRIES% GEQ %DFT_MAX_TRIES% goto failed_nochange
+ping -n 2 127.0.0.1 >NUL
+goto moveloop
+
+:moved
+call :log "Old exe is out of the way. Copying the new files."
+set TRIES=0
+
 :copyloop
-set /a tries+=1
-xcopy "%SRC%\\*" "%DEST%\\" /Y /E /I >> "%LOG%" 2>&1
+xcopy "%DFT_SRC%\*" "%DFT_DEST%\" /Y /E /I /Q >> "%DFT_LOG%" 2>&1
 if not errorlevel 1 goto copied
-echo [%date% %time%] Copy attempt !tries! failed - a file may still be in use. >> "%LOG%" 2>&1
-if !tries! GEQ 20 goto failed
-timeout /t 1 /nobreak >NUL
+set /a TRIES+=1
+call :log "Copy attempt %TRIES% failed."
+if %TRIES% GEQ %DFT_MAX_TRIES% goto failed_rollback
+ping -n 2 127.0.0.1 >NUL
 goto copyloop
 
 :copied
-echo [%date% %time%] Copy succeeded after !tries! attempt(s). >> "%LOG%" 2>&1
-start "" "%DEST%\\{exe_name}"
-echo [%date% %time%] Relaunch command issued. >> "%LOG%" 2>&1
-rmdir /S /Q "%SRC%" 2>NUL
-del "%~f0"
+if not exist "%DFT_DEST%\%DFT_EXE%" goto failed_rollback
+call :log "New files are in place. Starting the new version."
+start "" /D "%DFT_DEST%" "%DFT_DEST%\%DFT_EXE%"
+call :log "Relaunch issued."
+rem The old exe is deliberately LEFT as <name>.old. The new app deletes it
+rem itself on its first successful start, which doubles as proof that the
+rem new version really launched - and until then the previous version is
+rem still on disk if something unforeseen stops the new one starting.
+rmdir /S /Q "%DFT_STAGING%" >NUL 2>&1
+call :log "Finished."
+goto end
+
+:failed_rollback
+call :log "Install failed - putting the previous version back."
+if exist "%DFT_DEST%\%DFT_EXE%.old" move /Y "%DFT_DEST%\%DFT_EXE%.old" "%DFT_DEST%\%DFT_EXE%" >> "%DFT_LOG%" 2>&1
+
+:failed_nochange
+call :log "UPDATE FAILED."
+echo failed > "%DFT_FAIL%"
+tasklist /FI "PID eq %DFT_PID%" /NH 2>NUL | find "%DFT_PID%" >NUL
+if not errorlevel 1 goto end
+call :log "Restarting the previous version."
+start "" /D "%DFT_DEST%" "%DFT_DEST%\%DFT_EXE%"
+goto end
+
+:end
 exit /b 0
 
-:failed
-echo [%date% %time%] Giving up after !tries! copy attempts. >> "%LOG%" 2>&1
-echo Update failed - a file may still be in use. Your previous version is untouched.
-echo Details: %LOG%
-pause
-exit /b 1
-'''
-    script_path.write_text(script, encoding="utf-8")
+:log
+echo [%date% %time%] %~1 >> "%DFT_LOG%"
+exit /b 0
+"""
+
+
+def write_install_script(pid: int, temp_dir=None) -> Path:
+    """Writes the static helper script and returns its path. CRLF line
+    endings written explicitly (not left to text-mode translation, which
+    differs by platform): cmd.exe can mis-handle labels and goto in a batch
+    file with bare LF endings."""
+    script_path = Path(temp_dir or tempfile.gettempdir()) / f"dftracker_update_{pid}.bat"
+    text = INSTALL_SCRIPT.replace("\r\n", "\n").replace("\n", "\r\n")
+    with open(script_path, "w", encoding="ascii", newline="") as f:
+        f.write(text)
     return script_path
+
+
+def clean_pyinstaller_env(env: dict) -> dict:
+    """Returns a copy of env that's safe to start a NEW instance of this
+    app from.
+
+    A PyInstaller onefile app records where it unpacked itself in
+    environment variables that every child process inherits (_MEIPASS2
+    before PyInstaller 6.9, the _PYI_* family after). A new copy of the
+    exe launched with those still set mistakes itself for a child of the
+    running app and tries to run out of the OLD app's temp folder - which
+    is deleted the moment that app exits - so the relaunched app can fail
+    to start even when the file replacement itself went perfectly.
+    Removing them, and setting PYINSTALLER_RESET_ENVIRONMENT=1 (which
+    newer PyInstaller documents for exactly this "launch myself again"
+    case), gives the new exe a clean start under either generation.
+    """
+    cleaned = {k: v for k, v in env.items()
+               if k.upper() != "_MEIPASS2" and not k.upper().startswith("_PYI_")}
+    cleaned["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return cleaned
+
+
+def build_install_env(staged_root: Path, staging: Path, install_dir: Path,
+                      exe_name: str, pid: int, log_path: Path,
+                      base_env=None) -> dict:
+    env = clean_pyinstaller_env(dict(base_env if base_env is not None else os.environ))
+    env.update({
+        "DFT_PID": str(pid),
+        "DFT_EXE": exe_name,
+        "DFT_SRC": str(staged_root),
+        "DFT_STAGING": str(staging),
+        "DFT_DEST": str(install_dir),
+        "DFT_LOG": str(log_path),
+        "DFT_FAIL": str(FAIL_MARKER),
+    })
+    return env
+
+
+def _check_install_dir_writable(install_dir: Path) -> None:
+    """Fails BEFORE the app closes if it can't write where it lives (e.g.
+    installed under Program Files without admin rights) - otherwise the
+    app would shut down, the update would fail, and the only trace would
+    be a log nobody knows to look for."""
+    try:
+        with tempfile.NamedTemporaryFile(dir=install_dir, prefix=".dft_write_test_"):
+            pass
+    except OSError as e:
+        raise UpdateError(
+            f"Delta Force Tracker can't write to its own folder ({install_dir}), "
+            f"so it can't replace itself ({e.__class__.__name__}). Move the app "
+            "to a folder you own (like your Desktop or Documents), or download "
+            "the new version manually.")
 
 
 def launch_installer_and_exit(staging: Path,
                               expected_exe_name: str = "DeltaForceTracker.exe") -> None:
     """The only step that touches the real install directory. Writes and
-    launches the self-replace batch script (detached, so it outlives
-    this process), then returns - the CALLER is responsible for actually
+    launches the helper script (hidden, detached, so it outlives this
+    process), then returns - the CALLER is responsible for actually
     exiting the app right after (this function does not call sys.exit()
     itself, so the GUI can run its own normal shutdown - closing Discord
-    RPC, stopping the hotkey listener - before the process ends).
+    RPC, stopping the hotkey listeners - before the process ends).
 
     Raises UpdateError, without launching anything, if this isn't a
-    frozen Windows build: running from source has no "install exe" to
-    replace (sys.executable is the Python interpreter, not this app),
-    so silently doing nothing would be far more confusing than refusing
-    clearly.
+    frozen Windows build (running from source has no "install exe" to
+    replace - sys.executable is the Python interpreter, not this app, so
+    silently doing nothing would be far more confusing than refusing
+    clearly), or if the install folder isn't writable.
     """
     if not IS_WINDOWS:
         raise UpdateError("Auto-install is only supported on Windows.")
@@ -275,20 +373,118 @@ def launch_installer_and_exit(staging: Path,
             "Auto-install only works in a built .exe, not when running from source.")
 
     install_dir = current_install_dir()
+    _check_install_dir_writable(install_dir)
     staged_root = _find_staged_root(staging, expected_exe_name)
     pid = os.getpid()
-    script_path = build_install_script(staged_root, install_dir,
-                                       expected_exe_name, pid)
 
-    # DETACHED_PROCESS + CREATE_NEW_PROCESS_GROUP: the script must keep
-    # running after this Python process exits, and must not be tied to
-    # this process's console (there usually isn't one - this is the
-    # windowed GUI build) or its process group (so closing this app's
-    # window can't take the updater down with it).
-    DETACHED_PROCESS = 0x00000008
+    temp = Path(tempfile.gettempdir())
+    log_path = temp / f"dftracker_update_{pid}.log"
+    log_path.unlink(missing_ok=True)       # a fresh log per attempt
+    FAIL_MARKER.unlink(missing_ok=True)    # the marker only ever describes THIS attempt
+
+    script_path = write_install_script(pid, temp)
+    env = build_install_env(staged_root, staging, install_dir,
+                            expected_exe_name, pid, log_path)
+    _spawn_hidden(["cmd.exe", "/d", "/c", str(script_path)], env, str(temp))
+
+
+def _spawn_hidden(cmd: list, env: dict, cwd: str) -> None:
+    """Starts cmd with no visible window that survives this process exiting.
+
+    CREATE_NO_WINDOW, not DETACHED_PROCESS (what this used to use): a
+    detached cmd has no console at all, so every console tool it runs
+    (tasklist, find, xcopy...) allocates its OWN new console - on Windows
+    11 each one opens as a Windows Terminal window, which is exactly the
+    blank 'find "29748"' window that showed up on screen. With
+    CREATE_NO_WINDOW cmd gets one hidden console and its children share
+    it. Standard handles are explicitly the null device rather than
+    whatever a windowed app happens to have inherited.
+
+    Tries to break away from the parent's job object first, so a launcher
+    that kills child processes when its job closes can't take the updater
+    down with the app. If the job doesn't permit that, CreateProcess
+    refuses outright, so fall back to the same launch without it.
+    """
+    CREATE_NO_WINDOW = 0x08000000
     CREATE_NEW_PROCESS_GROUP = 0x00000200
-    subprocess.Popen(
-        ["cmd.exe", "/c", str(script_path)],
-        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-        close_fds=True,
-    )
+    CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+    base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+
+    def start(flags):
+        return subprocess.Popen(
+            cmd, creationflags=flags, env=env, cwd=cwd, close_fds=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+    try:
+        start(base | CREATE_BREAKAWAY_FROM_JOB)
+    except OSError:
+        try:
+            start(base)
+        except OSError as e:
+            raise UpdateError(f"Couldn't start the update helper: {e}")
+
+
+# ---------------------------------------------------------------------
+# Housekeeping, run by the app on every start
+# ---------------------------------------------------------------------
+
+def consume_failure_marker(path=None) -> bool:
+    """True (once) if the last update attempt failed - and removes the
+    marker so it's only ever reported one time."""
+    marker = Path(path or FAIL_MARKER)
+    if not marker.exists():
+        return False
+    try:
+        marker.unlink()
+    except OSError:
+        pass
+    return True
+
+
+def latest_update_log(temp_dir=None):
+    """The newest update log, so a failure message can say where it is."""
+    logs = list(Path(temp_dir or tempfile.gettempdir()).glob(_LOG_GLOB))
+    return max(logs, key=lambda p: p.stat().st_mtime) if logs else None
+
+
+def cleanup_leftovers(exe_path=None, temp_dir=None, now=None) -> None:
+    """Best-effort tidy-up after an update; never raises.
+
+    - <exe>.old: the previous version, renamed aside during the swap. The
+      script deliberately leaves it: removing it here, on the new app's
+      first successful start, is what proves the new version launched, and
+      until then it's the way back if something stopped it starting.
+    - Old helper scripts (after 2 minutes, so a script that's still
+      finishing its own cleanup is left alone) and old logs (after 14
+      days; recent ones are kept because they're the diagnostic trail).
+    - Staging folders and half-downloaded zips older than a day: a failed
+      update deliberately leaves its staging folder behind, and a crash
+      mid-download leaves a partial zip. (Only swept at start-up, so the
+      one staged in THIS session is never touched.)
+    """
+    try:
+        exe = Path(exe_path) if exe_path else (
+            Path(sys.executable).resolve() if getattr(sys, "frozen", False) else None)
+        if exe is not None:
+            (exe.parent / (exe.name + ".old")).unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        temp = Path(temp_dir or tempfile.gettempdir())
+        now = now if now is not None else time.time()
+        for glob, max_age in ((_SCRIPT_GLOB, 120), (_LOG_GLOB, 14 * 86400),
+                              ("dftracker_update_*.zip", 86400)):
+            for f in temp.glob(glob):
+                try:
+                    if now - f.stat().st_mtime > max_age:
+                        f.unlink()
+                except OSError:
+                    pass
+        for d in temp.glob("dftracker_staged_*"):
+            try:
+                if d.is_dir() and now - d.stat().st_mtime > 86400:
+                    shutil.rmtree(d, ignore_errors=True)
+            except OSError:
+                pass
+    except OSError:
+        pass

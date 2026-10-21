@@ -148,12 +148,16 @@ def _channel_label(channel):
     }.get(channel, "Playwright's bundled Chromium")
 
 
-async def _run(headless: bool = False, persistent: bool = False) -> dict:
+async def _run(headless: bool = False, persistent: bool = False,
+               cookies: list = None) -> dict:
     captured: dict = {}
     seen: set = set()
 
     async with async_playwright() as p:
         ctx, browser = await _launch_context(p, headless, persistent)
+
+        if cookies:
+            await ctx.add_cookies(cookies)
 
         pages = ctx.pages
         page = pages[0] if pages else await ctx.new_page()
@@ -266,8 +270,24 @@ async def _run(headless: bool = False, persistent: bool = False) -> dict:
     return captured
 
 
-def run(headless: bool = False, persistent: bool = False) -> dict:
-    return asyncio.run(_run(headless=headless, persistent=persistent))
+def run(headless: bool = False, persistent: bool = False,
+        cookies: list = None) -> dict:
+    return asyncio.run(_run(headless=headless, persistent=persistent,
+                            cookies=cookies))
+
+
+def run_with_session(openid: str, token: str, game_id: str = "29158",
+                     channel: str = "131") -> dict:
+    """No login UI: seed the DfTools page's own session cookies (seen as
+    Wand_DF_* in the captured traffic) and let the page make its signed
+    requests; they are captured exactly like a manual login."""
+    cookies = [{"name": n, "value": v, "domain": "www.playdeltaforce.com",
+                "path": "/", "secure": True}
+               for n, v in (("Wand_DF_openid", openid),
+                            ("Wand_DF_token", token),
+                            ("Wand_DF_game_id", game_id),
+                            ("Wand_DF_channel", channel))]
+    return run(headless=True, persistent=False, cookies=cookies)
 
 
 def load() -> dict:

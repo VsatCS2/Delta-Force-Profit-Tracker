@@ -17,7 +17,7 @@ version is older than the current one - keep each line short, plain,
 and user-facing (not a commit log).
 """
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "2.0.0"
 
 
 def version_tuple(v: str):
@@ -33,13 +33,21 @@ def version_tuple(v: str):
 
 
 CHANGELOG = {
+    "2.0.0": [
+        "New: Sign in with Discord - a free DF Tracker account is now needed for Player Lookup and the Search Overlay. You'll find it under Settings → Account. Tracking your own matches still needs no account",
+        "New: 7 color themes - Midnight, Obsidian, Ember, Glacier, Forest, Dusk and Daylight. Pick one with the colored dots at the top of Settings → Appearance. Each has its own banner artwork, or you can choose your own picture",
+        "New: Operators page - see what each operator has earned you in credits, click a column to sort, and double-click an operator to see its matches",
+        "Improved: Player Lookup now runs through DF Tracker's own server, with a daily lookup allowance you can see in Settings → Account (it resets at midnight UTC)",
+        "Fixed: mouse-wheel scrolling now goes to the list under your cursor, and passes through to the page when that list has nothing to scroll",
+        "Note: Player Lookup and the Search Overlay now send your searches, with your DF Tracker account, to DF Tracker's server, which forwards them to a third-party game-data API. Extended Stats and Price Alerts still use deltaforceapi.com",
+    ],
     "1.5.0": [
         "New: Price Alerts — pick an auction item and the price you'd buy it at, and get a pop-up and a sound when it drops that low (checked every minute, even while minimized)",
         "New: Player Lookup — search any player by name for their combat stats and stash value",
         "New: Search Overlay — look up a teammate or opponent mid-match with its own shortcut (Ctrl+Shift+O by default, changeable in Settings)",
         "New: Extended Stats on your Profile tab — bullets fired, hit and missed, kills and deaths by tier, category scores, and a stash value breakdown",
         "Improved: the Profile tab now uses the full window width, three cards per row, so there's less scrolling on wide screens",
-        "Improved: the auto-updater is more reliable at replacing the app and reopening it, and keeps a log if an install ever fails",
+        "Improved: the auto-updater no longer flashes console windows, puts your current version back if an install fails, and tells you when an update didn't go through",
         "Note: Player Lookup, the Search Overlay, Extended Stats and Price Alerts use deltaforceapi.com, an independent third-party service. Everything else still comes from the game's own web API",
     ],
     "1.4.0": [

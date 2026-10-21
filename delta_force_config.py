@@ -25,3 +25,11 @@ UPDATE_INFO_URL = "https://raw.githubusercontent.com/VsatCS2/Delta-Force-Profit-
 # official API already powers. Leave "" to turn this off entirely; every
 # function in delta_force_thirdparty.py fails soft with it unset.
 DELTAFORCEAPI_KEY = "sk_live_6ebd98aa06547110c198b4e1539f527d30489aa90096d3a5323049a4cd3447fd"
+
+PLAYERAPI_PROXY_URL = "https://dfstatscl-production-d969.up.railway.app"
+PLAYERAPI_PROXY_TOKEN = "DFTools"
+
+ACCOUNTS_SUPABASE_URL = "https://viaqggrvxhfbhwychgxp.supabase.co"
+ACCOUNTS_SUPABASE_KEY = "sb_publishable_Irq5OyrXD-2snQQ609gBJA_g5u-Gicv"
+ACCOUNTS_GATEWAY_URL  = "https://dfstatscl-production-d969.up.railway.app"
+ACCOUNTS_UPGRADE_URL  = ""          # where "Upgrade" should go; leave empty until you have a page
