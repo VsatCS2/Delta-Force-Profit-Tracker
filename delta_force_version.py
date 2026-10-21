@@ -17,7 +17,7 @@ version is older than the current one - keep each line short, plain,
 and user-facing (not a commit log).
 """
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 
 
 def version_tuple(v: str):
