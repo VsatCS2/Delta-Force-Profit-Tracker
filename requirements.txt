@@ -1,5 +1,10 @@
-requests>=2.31
-Pillow>=10.0
-pypresence>=4.3
-playwright>=1.40
-pystray>=0.19
+# DF Tracker: packages the app itself imports (found by reading the code).
+# Versions are the ones in your venv / build_venv from Sep 28; your system Python
+# may be newer. For exact versions of what you really build with, run:
+#     py -m pip freeze
+Pillow==12.3.0
+requests==2.34.2
+playwright==1.63.0
+pystray==0.19.5
+pypresence==4.6.2
+pywebview          # also installs pythonnet on Windows; not pinned because it wasn't in either venv
