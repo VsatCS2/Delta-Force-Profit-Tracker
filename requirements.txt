@@ -1,10 +1,9 @@
-# DF Tracker: packages the app itself imports (found by reading the code).
-# Versions are the ones in your venv / build_venv from Sep 28; your system Python
-# may be newer. For exact versions of what you really build with, run:
-#     py -m pip freeze
+# DF Tracker: Python packages needed to run it from source.
+#   pip install -r requirements.txt
+# The versions below are ones it has been tested with; newer ones usually work too.
 Pillow==12.3.0
 requests==2.34.2
-playwright==1.63.0
-pystray==0.19.5
-pypresence==4.6.2
-pywebview          # also installs pythonnet on Windows; not pinned because it wasn't in either venv
+playwright==1.63.0      # optional: the browser login
+pystray==0.19.5         # system tray
+pypresence==4.6.2       # Discord Rich Presence
+pywebview               # the sign-in window (also installs pythonnet on Windows)
