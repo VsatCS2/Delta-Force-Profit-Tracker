@@ -7,7 +7,8 @@
 <!-- ===== EDIT THESE THREE THINGS =====
   1. SITE URL:      https://vsatcs2.github.io/Delta-Force-Profit-Tracker/   (change if you use a custom domain)
   2. DOWNLOAD URL:  https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest
-  3. VERSION:       2.0.0
+  3. VERSION:       2.0.1
+  4. MEDIA:         docs/media/ holds the tour video and screenshots (rebuild the video with make_tour.py)
   (search for those strings; they appear a few times each)
 -->
 
@@ -19,7 +20,12 @@
 <meta property="og:title" content="Delta Force Profit Tracker">
 <meta property="og:description" content="Track what every Delta Force match actually pays. Profit by map and operator, in-game overlays, player lookup, and price alerts.">
 <meta property="og:url" content="https://vsatcs2.github.io/Delta-Force-Profit-Tracker/">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/og-image.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The DF Tracker overview screen showing profit for today, this week, this month and all time">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/og-image.jpg">
 <meta name="theme-color" content="#0d1829">
 
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1829'/%3E%3Cpath d='M16 5l9 11-9 11-9-11z' fill='none' stroke='%2358d08e' stroke-width='3' stroke-linejoin='round'/%3E%3Ccircle cx='16' cy='16' r='2.6' fill='%2358d08e'/%3E%3C/svg%3E">
@@ -36,7 +42,7 @@
   "alternateName": "DF Tracker",
   "applicationCategory": "GameApplication",
   "operatingSystem": "Windows 10, Windows 11",
-  "softwareVersion": "2.0.0",
+  "softwareVersion": "2.0.1",
   "description": "A Windows app for Delta Force that tracks profit per match, map and operator, shows your profit and looks up players with in-game hotkey overlays, and alerts you when an item drops to the price you want to pay.",
   "downloadUrl": "https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest",
   "url": "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/",
@@ -52,7 +58,29 @@
     "Price alerts that notify you when an item drops to the price you want to pay",
     "Optional community leaderboard",
     "Automatic updates, system tray, and color themes"
+  ],
+  "screenshot": [
+    "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/overview-full.webp",
+    "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/profile-full.webp",
+    "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/maps-full.webp",
+    "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/operators-full.webp",
+    "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/matches-full.webp",
+    "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/community-full.webp",
+    "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/player-lookup-full.webp",
+    "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/price-alerts-full.webp"
   ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "VideoObject",
+  "name": "DF Tracker 2.0 tour",
+  "description": "A 38-second tour of DF Tracker, the Delta Force profit tracker: overview, profile, maps, operators, match history, community leaderboard, player lookup and price alerts.",
+  "thumbnailUrl": "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/tour-poster.jpg",
+  "contentUrl": "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/media/tour.mp4",
+  "uploadDate": "2026-10-21",
+  "duration": "PT38S"
 }
 </script>
 <script type="application/ld+json">
@@ -290,6 +318,27 @@
     html { scroll-behavior: auto; }
   }
 
+  /* ---------- see it in action ---------- */
+  .tour { margin: 0 0 44px; }
+  .tour video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; background: #0a1220;
+                border: 1px solid var(--line); border-radius: 14px; }
+  .tour figcaption { color: var(--muted); font-size: .85rem; margin-top: 12px; }
+  .shots { list-style: none; margin: 0; padding: 0; display: grid; gap: 20px;
+           grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+  .shot { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+          text-decoration: none; color: var(--ink); transition: border-color .15s, transform .15s; }
+  .shot:hover { border-color: var(--muted); transform: translateY(-2px); }
+  .shot img { display: block; width: 100%; height: auto; aspect-ratio: 8 / 5; }
+  .shot span { display: block; padding: 12px 16px 14px; font-weight: 600; font-size: .95rem; border-top: 1px solid var(--line); }
+  dialog#lightbox { border: 0; padding: 0; background: transparent; color: var(--ink); max-width: min(96vw, 1600px); max-height: 94vh; overflow: visible; }
+  dialog#lightbox::backdrop { background: rgba(5, 10, 18, .88); }
+  dialog#lightbox img { display: block; max-width: 100%; max-height: 86vh; margin: 0 auto; border-radius: 10px; border: 1px solid var(--line); cursor: zoom-out; }
+  dialog#lightbox form { text-align: center; margin-top: 14px; }
+  dialog#lightbox button { font: inherit; font-weight: 600; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line);
+                           border-radius: 999px; padding: 9px 22px; cursor: pointer; }
+  dialog#lightbox button:hover { border-color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { .shot { transition: none; } .shot:hover { transform: none; } }
+
   /* ---------- responsive ---------- */
   @media (max-width: 900px) {
     .hero, .split { grid-template-columns: 1fr; gap: 40px; }
@@ -325,7 +374,8 @@
         <p class="lead">DF Tracker is a Windows app that adds up your credits for every match and shows where your profit really comes from, by map and by operator. Press a hotkey to see your profit or look up a player without leaving the game, and get an alert when an item you want drops to your price.</p>
         <div class="cta-row">
           <a class="btn btn-primary btn-lg" href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest">Download for Windows</a>
-          <span class="meta">Version 2.0.0. Windows 10 and 11.</span>
+          <a class="btn btn-quiet" href="#see-it">Watch the tour</a>
+          <span class="meta">Version 2.0.1. Windows 10 and 11.</span>
         </div>
       </div>
 
@@ -340,6 +390,29 @@
         <p class="ledger-foot">All amounts in credits.</p>
       </aside>
     </div>
+
+    <section id="see-it" aria-labelledby="s-title">
+      <h2 class="section-title" id="s-title">See it in action</h2>
+      <p class="section-lead">A 38-second tour, then every screen. Click a screenshot to enlarge it.</p>
+      <figure class="tour">
+        <video controls preload="metadata" playsinline width="1280" height="720" poster="media/tour-poster.jpg">
+          <source src="media/tour.mp4" type="video/mp4">
+          <source src="media/tour.webm" type="video/webm">
+          Your browser can't play this video. <a href="media/tour.mp4">Download it</a> instead.
+        </video>
+        <figcaption>A tour of DF Tracker 2.0. No sound. The screens show one player's real match data.</figcaption>
+      </figure>
+      <ul class="shots">
+        <li><a class="shot" href="media/overview-full.webp"><img src="media/overview.webp" width="800" height="500" loading="lazy" alt="Overview screen showing profit for today, this week, this month and all time, with daily, weekly and monthly tables and a Quick Stats panel."><span>Overview</span></a></li>
+        <li><a class="shot" href="media/profile-full.webp"><img src="media/profile.webp" width="800" height="500" loading="lazy" alt="Profile screen with player, rank, combat, economy and team stats, followed by extended stats."><span>Profile</span></a></li>
+        <li><a class="shot" href="media/maps-full.webp"><img src="media/maps.webp" width="800" height="500" loading="lazy" alt="Maps screen listing every map with its matches, wins and losses, and net income."><span>Maps</span></a></li>
+        <li><a class="shot" href="media/operators-full.webp"><img src="media/operators.webp" width="800" height="500" loading="lazy" alt="Operators screen with matches, win-loss, win rate, net income and average per match for each operator."><span>Operators</span></a></li>
+        <li><a class="shot" href="media/matches-full.webp"><img src="media/matches.webp" width="800" height="500" loading="lazy" alt="Match history list with the result, kills, map, operator, rank and net income of each match."><span>Match history</span></a></li>
+        <li><a class="shot" href="media/community-full.webp"><img src="media/community.webp" width="800" height="500" loading="lazy" alt="Community screen with the leaderboard: net income, matches, win-loss, win rate, best map and best operator. Other players' names are blurred."><span>Community</span></a></li>
+        <li><a class="shot" href="media/player-lookup-full.webp"><img src="media/player-lookup.webp" width="800" height="500" loading="lazy" alt="Player lookup screen showing a player's matches, combat, accuracy, knocks and stash value."><span>Player lookup</span></a></li>
+        <li><a class="shot" href="media/price-alerts-full.webp"><img src="media/price-alerts.webp" width="800" height="500" loading="lazy" alt="Price alerts screen with an item search, a target price field and the list of active alerts."><span>Price alerts</span></a></li>
+      </ul>
+    </section>
 
     <section id="features" aria-labelledby="f-title">
       <h2 class="section-title" id="f-title">Your profit, in detail</h2>
@@ -470,7 +543,7 @@
         <li><b>Sign in</b><span>Use your Delta Force account and your matches load in. Sign in with Discord too if you want player lookup.</span></li>
       </ol>
       <a class="btn btn-primary btn-lg" href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest">Download for Windows</a>
-      <p class="meta" style="margin-top:14px">Version 2.0.0</p>
+      <p class="meta" style="margin-top:14px">Version 2.0.1</p>
     </section>
 
     <section class="faq" aria-labelledby="q-title">
@@ -537,6 +610,27 @@
       if (p < 1) requestAnimationFrame(tick);
     }
     setTimeout(function () { requestAnimationFrame(tick); }, delay);
+  })();
+</script>
+<dialog id="lightbox" aria-label="Screenshot">
+  <img alt="">
+  <form method="dialog"><button>Close</button></form>
+</dialog>
+<script>
+  // Enlarge a screenshot in place. Without JS (or in an old browser) the links simply open the image.
+  (function () {
+    var box = document.getElementById('lightbox');
+    if (!box || typeof box.showModal !== 'function') return;
+    var img = box.querySelector('img');
+    document.querySelectorAll('a.shot').forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        img.src = a.getAttribute('href');
+        img.alt = a.querySelector('img').alt;
+        box.showModal();
+      });
+    });
+    box.addEventListener('click', function (e) { if (e.target === box || e.target === img) box.close(); });
   })();
 </script>
 </body>
