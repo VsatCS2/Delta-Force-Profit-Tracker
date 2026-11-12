@@ -183,6 +183,45 @@ def _require_server() -> str:
 # ---------------------------------------------------------------------
 # Opt in / register
 # ---------------------------------------------------------------------
+PLACEHOLDER_NAME = "Player"
+
+
+def _lookup_nickname():
+    """The player's in-game nickname from the game's profile service, or None.
+    Never raises: a failed lookup just means we fall back to the placeholder."""
+    try:
+        data = core.fetch_my_data()
+    except Exception:
+        return None
+    nick = ((data or {}).get("player_info") or {}).get("nickname") if isinstance(data, dict) else None
+    return nick.strip() if isinstance(nick, str) and nick.strip() else None
+
+
+def _saved_display_name():
+    try:
+        return json.loads(ACCOUNT_FILE.read_text()).get("display_name")
+    except Exception:
+        return None
+
+
+def heal_display_name(nickname, timeout: int = _REQUEST_TIMEOUT_SECONDS) -> bool:
+    """Accounts created before the profile had loaded were registered under the
+    placeholder name "Player". Once the real nickname is known, register again:
+    the server recognises the same openid, keeps the same api_key and the same
+    opt-in choice, and only updates the display name. Returns True if it renamed.
+    Never raises (it runs inside the background sync)."""
+    nickname = (nickname or "").strip()
+    if not nickname or nickname == PLACEHOLDER_NAME:
+        return False
+    try:
+        if not is_linked() or _saved_display_name() not in (None, "", PLACEHOLDER_NAME):
+            return False
+        opt_in(nickname=nickname, want_visible=True, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def opt_in(nickname: str = None, want_visible: bool = True, timeout: int = _REQUEST_TIMEOUT_SECONDS) -> dict:
     """Registers (or re-registers) this player using the openid from
     their own completed DfTools login, and opts them into the
@@ -204,13 +243,18 @@ def opt_in(nickname: str = None, want_visible: bool = True, timeout: int = _REQU
     openid = core.current_openid()
     if not openid:
         raise NotLoggedInError(
-            "Log in to Delta Force Tracker first (the 'Log In (browser)' "
-            "button) — the leaderboard identifies you using the same "
+            "Log in to Delta Force Tracker first (use a Log In button on the "
+            "right) — the leaderboard identifies you using the same "
             "login, so there's nothing to opt in with yet.")
+
+    # Right after a first login the profile hasn't been loaded yet, so the
+    # caller often has no nickname. Look it up here rather than registering
+    # the placeholder name.
+    nickname = (nickname or "").strip() or _lookup_nickname() or PLACEHOLDER_NAME
 
     resp = requests.post(
         f"{server_url}/register",
-        json={"openid": openid, "nickname": nickname or "Player",
+        json={"openid": openid, "nickname": nickname,
               "opt_in": want_visible},
         timeout=timeout,
     )
@@ -219,7 +263,7 @@ def opt_in(nickname: str = None, want_visible: bool = True, timeout: int = _REQU
 
     account = {
         "api_key": result["api_key"],
-        "display_name": nickname or "Player",
+        "display_name": nickname,
     }
     ACCOUNT_FILE.write_text(json.dumps(account, indent=2))
     return {**account, "opted_in": result.get("opted_in", want_visible)}
@@ -264,6 +308,13 @@ def sync_stats(rows: list, profile: dict = None, timeout: int = _REQUEST_TIMEOUT
     requests.RequestException on a network/server error - callers should
     catch and show a status message rather than let this crash a
     background thread."""
+    # A player registered before their profile loaded is listed as "Player";
+    # fix that the first time we know their real nickname.
+    try:
+        heal_display_name(((profile or {}).get("player_info") or {}).get("nickname"))
+    except Exception:
+        pass
+
     server_url = _require_server()
     headers = _auth_headers()
 

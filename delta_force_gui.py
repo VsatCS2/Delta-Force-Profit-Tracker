@@ -37,6 +37,8 @@ import delta_force_overlay as overlay_mod
 import delta_force_thirdparty as thirdparty_mod
 import delta_force_alerts as alerts_mod
 import delta_force_startup as startup_mod
+import delta_force_singleton as singleton
+import delta_force_theme as _theme_module
 import delta_force_updater as updater_mod
 import delta_force_legal as legal_mod
 from delta_force_paths import APP_DATA_DIR, migrate_legacy_file, resource_path
@@ -251,6 +253,7 @@ class TrackerApp:
         self.root.after(700, self._start_update_check)
         self.root.after(1500, self._accounts_tick)
         self.root.after(2500, self._community_startup_check)
+        self.root.after(500, self._reconcile_startup_state)
         self.root.after(1000, self._repair_startup_entry)
         self.root.after(200, self._poll_avatars)
         self.root.after(300, self._startup_gate)
@@ -880,16 +883,29 @@ class TrackerApp:
         if core.have_credentials("matchlist"):
             return
 
-        answer = messagebox.askyesno(
+        # Only TELL the user how to log in. Launching the browser login from here
+        # meant people never got to see the email option, so nothing opens by itself.
+        hint = self._login_options_text()
+        messagebox.showinfo(
             "Welcome to DF Tracker",
-            "Log in to load your stats. Open the login window now?",
+            f"Log in to load your stats.\n\n{hint} to sign in with your "
+            "Delta Force account. You can do this any time.",
             parent=self.root,
         )
-        if answer:
-            self.start_browser_login()
-        else:
-            self.set_status(
-                "Not logged in. Use Log In on the right when you're ready.")
+        self.set_status(f"Not logged in. {hint} when you're ready.")
+
+    def _login_options_text(self):
+        """Describes the login buttons that are really on screen. The server's
+        email-login switch may not have been fetched yet on a first launch, so
+        in that case don't guess which buttons exist."""
+        try:
+            if self._email_login_allowed():
+                return 'Click "Log In (email)" or "Log In (browser)" on the right'
+            if not getattr(self.accounts, "_flags_at", 0):
+                return "Use the Log In button on the right"
+        except Exception:
+            return "Use the Log In button on the right"
+        return 'Click "Log In (browser)" on the right'
 
     # ------------------------------------------------------------------
     # Sections
@@ -1332,7 +1348,7 @@ class TrackerApp:
             # "missed a specific tab".
             msg = ("No weekly report data yet - click \"Refresh Weekly "
                    "Report\" in Settings." if core.have_credentials("weeklyreport")
-                   else "Not logged in yet — click \"Log In (browser)\".")
+                   else "Not logged in yet. " + self._login_options_text() + ".")
             self.wh_empty_label.configure(text=msg)
             self.wh_empty_label.pack(fill="x")
             return
@@ -1496,7 +1512,7 @@ class TrackerApp:
         items = self._high_value_items
         if not items:
             msg = ("No high-value items captured yet." if core.have_credentials("assetcalendar")
-                   else "Not logged in yet — click \"Log In (browser)\".")
+                   else "Not logged in yet. " + self._login_options_text() + ".")
             tk.Label(self.hvi_list_frame, text=msg, bg=c["SURFACE"],
                      fg=c["FG_MUTED"], font=("Segoe UI", 9), anchor="w",
                      justify="left", wraplength=760).pack(fill="x")
@@ -3433,6 +3449,19 @@ class TrackerApp:
             value=self.settings.get("discord_rpc", False))
         self._toggle_row(discord_card.body, "Enable Discord Rich Presence",
                          self.settings_rpc_var, self._on_settings_rpc_toggle)
+        self.settings_rpc_button_var = tk.BooleanVar(
+            value=self.settings.get("discord_rpc_button", True))
+        self._toggle_row(discord_card.body,
+                         "Show a \"Get DF Tracker\" button on my Discord status",
+                         self.settings_rpc_button_var, self._on_rpc_button_toggle,
+                         pack_opts={"anchor": "w", "pady": (10, 0)})
+        tk.Label(discord_card.body,
+                 text="Other people see it on your Discord profile while you use "
+                      "DF Tracker, so they can find the app. You won't see it on "
+                      "your own profile, and Discord's phone app doesn't show buttons.",
+                 bg=c["SURFACE"], fg=c["FG_DIM"], font=("Segoe UI", 9),
+                 anchor="w", justify="left", wraplength=640).pack(
+            anchor="w", padx=(50, 0), pady=(4, 0))
 
         # ---- Overlay ----
         section_title("Overlay",
@@ -3787,6 +3816,20 @@ class TrackerApp:
         # Mirror whatever the sidebar ended up with back into the settings tab.
         if hasattr(self, "rpc_var"):
             self.settings_rpc_var.set(self.rpc_var.get())
+
+    def _on_rpc_button_toggle(self):
+        """The 'Get DF Tracker' button on the Discord status: save the choice and,
+        if Rich Presence is running, update the status straight away."""
+        v = bool(self.settings_rpc_button_var.get())
+        self.settings["discord_rpc_button"] = v
+        _save_settings({"discord_rpc_button": v})
+        try:
+            import delta_force_rpc
+            delta_force_rpc.set_show_button(v)
+            if delta_force_rpc.is_enabled():
+                delta_force_rpc.update_presence(self.rows, self.profile_data)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Accounts
@@ -4241,6 +4284,52 @@ class TrackerApp:
         _save_settings({"minimize_to_tray": enabled})
         self.settings["minimize_to_tray"] = enabled
 
+    def _installed_by_installer(self):
+        """True for a copy the installer set up (it sits next to Inno's uninstaller).
+        The installer already asked about starting with Windows, so the app must
+        not second-guess that answer."""
+        try:
+            return (Path(sys.executable).parent / "unins000.exe").exists()
+        except Exception:
+            return False
+
+    def _reconcile_startup_state(self):
+        """Keep the Start-with-Windows switches telling the truth, and apply the
+        new-install default.
+          * If Windows already has a startup entry for us (the installer's tick box,
+            or the person's own choice), make Settings show it.
+          * If this is a brand-new PORTABLE copy (the installer asks, so it is left
+            alone) and nothing is registered, start with Windows by default,
+            minimized, and say so in the status bar.
+        Existing installs (a settings file already existed) are never changed."""
+        if not startup_mod.IS_WINDOWS:
+            return
+        try:
+            cmd = startup_mod.get_registered_command()
+            changes = {}
+            if cmd is not None:
+                minimized = "--minimized" in cmd
+                if not self.settings.get("start_on_boot"):
+                    changes["start_on_boot"] = True
+                if bool(self.settings.get("start_minimized")) != minimized:
+                    changes["start_minimized"] = minimized
+            elif (_theme_module.FIRST_RUN and getattr(sys, "frozen", False)
+                  and not self._installed_by_installer()):
+                if startup_mod.set_enabled(True, minimized=True):
+                    changes = {"start_on_boot": True, "start_minimized": True}
+                    self.set_status("DF Tracker will start with Windows, minimized. "
+                                    "You can change this in Settings \u2192 Startup.")
+            if changes:
+                self.settings.update(changes)
+                _save_settings(changes)
+                if hasattr(self, "settings_boot_var"):
+                    self.settings_boot_var.set(bool(self.settings.get("start_on_boot")))
+                if hasattr(self, "settings_boot_minimized_var"):
+                    self.settings_boot_minimized_var.set(bool(self.settings.get("start_minimized")))
+            self._update_startup_status_label()
+        except Exception:
+            pass
+
     def _repair_startup_entry(self):
         """If Start-on-boot is on but the Run entry points at an old
         location (app folder moved or re-extracted), fix it quietly."""
@@ -4507,6 +4596,7 @@ class TrackerApp:
             )
             return
 
+        delta_force_rpc.set_show_button(self.settings.get("discord_rpc_button", True))
         if on:
             ok = delta_force_rpc.enable()
             if ok:
@@ -4541,6 +4631,7 @@ class TrackerApp:
         if not delta_force_rpc.is_available():
             self.rpc_var.set(False)
             return
+        delta_force_rpc.set_show_button(self.settings.get("discord_rpc_button", True))
         if delta_force_rpc.enable():
             try:
                 delta_force_rpc.update_presence(self.rows, self.profile_data)
@@ -6217,7 +6308,7 @@ class TrackerApp:
             if not silent:
                 messagebox.showinfo(
                     "Not logged in",
-                    "Click \"Log In (browser)\" first.", parent=self.root)
+                    self._login_options_text() + " first.", parent=self.root)
             return
         core.set_debug(self.debug_var.get())
         threading.Thread(target=self._asset_calendar_worker,
@@ -6240,7 +6331,7 @@ class TrackerApp:
             if not silent:
                 messagebox.showinfo(
                     "Not logged in",
-                    "Click \"Log In (browser)\" first.", parent=self.root)
+                    self._login_options_text() + " first.", parent=self.root)
             return
         core.set_debug(self.debug_var.get())
         threading.Thread(target=self._weekly_report_worker,
@@ -6290,6 +6381,17 @@ class TrackerApp:
             self.msg_queue.put(("community_link_done", account))
         except Exception as e:
             self.msg_queue.put(("community_link_error", str(e)))
+
+    def _community_first_sync_worker(self):
+        """The upload right after joining. Quiet on failure: the player did join,
+        and the regular auto-sync will retry."""
+        try:
+            comm.sync_stats(self.rows, self.profile_data)
+            if self.settings.get("community_match_history_ack"):
+                comm.sync_matches(self.rows)
+            self.msg_queue.put(("community_sync_done", None))
+        except Exception:
+            self.msg_queue.put(("community_join_sync_failed", None))
 
     def start_community_sync(self):
         if self._community_busy:
@@ -6724,6 +6826,9 @@ class TrackerApp:
                     self.set_status(payload)
                 elif kind == "debug":
                     self._append_debug(payload)
+                elif kind == "show_window":
+                    # A second launch asked this copy to come to the front.
+                    self._restore_from_tray()
                 elif kind == "avatar_bytes":
                     op_id, data = payload
                     self._avatar_pending.discard(op_id)
@@ -6815,12 +6920,23 @@ class TrackerApp:
                     self.set_status(f"Profile fetch failed: {payload}")
                     self._set_busy(profile=False)
                 elif kind == "community_link_done":
-                    self._set_community_busy(False)
                     self._community_status = None
                     self._refresh_community_status_ui()
                     self.set_status(
                         f"Joined the community leaderboard as "
-                        f"{payload.get('display_name', 'Player')}.")
+                        f"{payload.get('display_name', 'Player')}. Uploading your stats...")
+                    # Joining only registers the player; upload their stats now so they appear
+                    # with real numbers instead of waiting for the next refresh. The first
+                    # upload can predate their matches finishing loading, so let the very next
+                    # data refresh upload again (clears the 2-minute throttle).
+                    self._last_auto_sync = datetime.min
+                    self._set_community_busy(True)
+                    threading.Thread(target=self._community_first_sync_worker,
+                                     daemon=True).start()
+                elif kind == "community_join_sync_failed":
+                    self._set_community_busy(False)
+                    self.set_status("Joined the leaderboard. The first upload didn't go "
+                                    "through; it will retry on the next refresh.")
                     self.start_community_leaderboard_fetch()
                 elif kind == "community_link_error":
                     self._set_community_busy(False)
@@ -7202,6 +7318,11 @@ def main():
         _remove_startup_and_exit()
         return
 
+    # One copy at a time. If DF Tracker is already running, ask it to come to the
+    # front and exit quietly (a launch at Windows startup, --minimized, just exits).
+    if not singleton.acquire(signal_existing="--minimized" not in sys.argv):
+        return
+
     # Must happen before Tk() creates the actual window - Windows decides
     # whether this process gets DPI-scaled (blurry, since it's really
     # just bitmap-stretched) or renders at native resolution based on
@@ -7219,7 +7340,8 @@ def main():
             pass
 
     root = tk.Tk()
-    TrackerApp(root)
+    app = TrackerApp(root)
+    singleton.start_listener(lambda: app.msg_queue.put(("show_window", None)))
     root.mainloop()
 
 

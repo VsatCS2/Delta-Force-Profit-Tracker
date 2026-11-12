@@ -100,6 +100,7 @@ DEFAULT_AUTO_REFRESH_MINUTES = 15
 DEFAULT_SETTINGS = {
     "theme": DEFAULT_THEME,
     "discord_rpc": False,
+    "discord_rpc_button": True,       # the "Get DF Tracker" button on the Discord status
     "auto_refresh_enabled": True,
     "auto_refresh_minutes": DEFAULT_AUTO_REFRESH_MINUTES,
     "auto_refresh_notify": False,
@@ -168,7 +169,12 @@ DEFAULT_SETTINGS = {
 }
 
 
+FIRST_RUN = False        # True for the rest of the process if THIS launch created the settings file (a brand-new install)
+
+
 def load_settings() -> dict:
+    global FIRST_RUN
+    first_run = not SETTINGS_FILE.exists()
     try:
         with open(SETTINGS_FILE) as f:
             loaded = json.load(f)
@@ -177,6 +183,17 @@ def load_settings() -> dict:
     merged = dict(DEFAULT_SETTINGS)
     if isinstance(loaded, dict):
         merged.update(loaded)
+    if first_run:
+        FIRST_RUN = True
+        # A brand-new install: Discord Rich Presence starts ON. It is saved right away so
+        # it is an ordinary setting from then on (turning it off sticks). Anyone who
+        # already has a settings file keeps exactly what they chose.
+        merged["discord_rpc"] = True
+        try:
+            with open(SETTINGS_FILE, "w") as f:
+                json.dump(merged, f, indent=2)
+        except Exception:
+            pass
     return merged
 
 

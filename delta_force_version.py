@@ -17,7 +17,7 @@ version is older than the current one - keep each line short, plain,
 and user-facing (not a commit log).
 """
 
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 
 
 def version_tuple(v: str):
@@ -33,6 +33,17 @@ def version_tuple(v: str):
 
 
 CHANGELOG = {
+    "2.0.2": [
+        "New: DF Tracker now starts with Windows, minimized, on new installs. The installer has a tick box for it (ticked by default) and you can change it any time in Settings \u2192 Startup. Existing installs keep their current setting",
+        "Improved: opening DF Tracker while it's already running now brings the existing window to the front instead of starting a second copy",
+        "New: your Discord status now has a \"Get DF Tracker\" button, so people who see you using the tracker can find the app. Turn it off any time in Settings \u2192 Discord Rich Presence. (Discord shows the button to other people, not to you)",
+    ],
+    "2.0.1": [
+        "Fixed: joining the community leaderboard now uses your in-game name instead of \"Player\". If you already joined as \"Player\", you're renamed automatically the next time your stats sync",
+        "Fixed: your stats now upload as soon as you join the leaderboard, instead of waiting for the next refresh",
+        "Improved: Discord Rich Presence is now on by default for new installs. Turn it off any time in Settings; existing installs keep their current choice",
+        "Improved: the welcome message now tells you how to log in instead of opening the browser login for you",
+    ],
     "2.0.0": [
         "New: Sign in with Discord - a free DF Tracker account is now needed for Player Lookup and the Search Overlay. You'll find it under Settings → Account. Tracking your own matches still needs no account",
         "New: 7 color themes - Midnight, Obsidian, Ember, Glacier, Forest, Dusk and Daylight. Pick one with the colored dots at the top of Settings → Appearance. Each has its own banner artwork, or you can choose your own picture",

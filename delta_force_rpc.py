@@ -35,6 +35,18 @@ DISCORD_CLIENT_ID = "1552115272301813861"   # e.g. "1234567890123456789"
 ASSET_LARGE_WIN = "df_logo_win"
 ASSET_LARGE_LOSS = "df_logo_loss"
 
+# ---- The button on the Discord status. ---------------------------------
+# People who see you using the tracker get a button on your status that
+# opens the website, so they can get it too. Discord's rules: at most two
+# buttons, a label of up to 32 characters, and a URL that starts with
+# http:// or https:// and is at most 512 characters. A button that breaks
+# those rules makes Discord reject the WHOLE presence update, so _button()
+# checks them and leaves the button out rather than risk the status.
+# Note: Discord shows the button to OTHER people, never to you on your own
+# profile, and its mobile app doesn't show buttons at all.
+BUTTON_LABEL = "Get DF Tracker"
+BUTTON_URL = "https://vsatcs2.github.io/Delta-Force-Profit-Tracker/"
+
 # How often to push an update to Discord (seconds). Discord rate-limits
 # updates to once per ~15 seconds, so don't go below that.
 _UPDATE_INTERVAL = 15
@@ -47,6 +59,7 @@ _state = {
     "enabled": False,
     "start_ts": int(time.time()),
     "error": None,
+    "show_button": True,
 }
 
 
@@ -132,6 +145,27 @@ def last_error() -> Optional[str]:
     return _state["error"]
 
 
+def set_show_button(on: bool) -> None:
+    """Show or hide the website button. Takes effect on the next update, which
+    is allowed to go out straight away rather than waiting out the throttle."""
+    _state["show_button"] = bool(on)
+    _state["last_update"] = 0.0
+
+
+def button_enabled() -> bool:
+    return bool(_state["show_button"])
+
+
+def _button() -> Optional[dict]:
+    """The button as Discord wants it, or None if it would break Discord's rules."""
+    label, url = str(BUTTON_LABEL or "").strip(), str(BUTTON_URL or "").strip()
+    if not label or len(label) > 32:
+        return None
+    if len(url) > 512 or not url.lower().startswith(("https://", "http://")):
+        return None
+    return {"label": label, "url": url}
+
+
 def _abbrev_number(n: float) -> str:
     """Format a number compactly for the small RPC text.
 
@@ -215,6 +249,10 @@ def _build_payload(rows: list, profile: Optional[dict]) -> dict:
         "large_image": large_key,
         "large_text": hover[:128],
     }
+    if _state["show_button"]:
+        button = _button()
+        if button:
+            payload["buttons"] = [button]
     return payload
 
 def update_presence(rows: Optional[list] = None,
