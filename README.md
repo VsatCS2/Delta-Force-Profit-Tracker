@@ -2,9 +2,9 @@
 
 Track what every Delta Force match actually pays. DF Tracker is a Windows app that adds up your credits for every match and shows where your profit really comes from, by map and by operator. Press a hotkey to see your profit or look up a player without leaving the game, and get an alert when an item you want drops to your price.
 
-**[Download for Windows](https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest)** · [Website and tour](https://vsatcs2.github.io/Delta-Force-Profit-Tracker/) · [Privacy](https://vsatcs2.github.io/Delta-Force-Profit-Tracker/privacy.html) · [Report a problem](https://github.com/VsatCS2/Delta-Force-Profit-Tracker/issues)
+**[Download for Windows](https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest)** · [Website and tour](https://deltaforcetracker.com/) · [Privacy](https://deltaforcetracker.com/privacy.html) · [Report a problem](https://github.com/VsatCS2/Delta-Force-Profit-Tracker/issues)
 
-[![DF Tracker overview screen](docs/media/overview-full.webp)](https://vsatcs2.github.io/Delta-Force-Profit-Tracker/)
+[![DF Tracker overview screen](docs/media/overview-full.webp)](https://deltaforcetracker.com/)
 
 ## What it does
 
@@ -60,7 +60,7 @@ There are two separate sign-ins, and only the first is needed to track your own 
 - Your match history, settings and caches stay on your PC.
 - A DF Tracker account stores what Discord provides when you sign in (your Discord ID, email address, display name and avatar), your plan, how many lookups you've used each day, and any admin notes about the account.
 - If you join the community leaderboard, your Overview totals and recent matches are shared under your in-game nickname. You can leave any time from the app.
-- You can ask for your account and its data to be deleted. The [privacy page](https://vsatcs2.github.io/Delta-Force-Profit-Tracker/privacy.html) has the full details.
+- You can ask for your account and its data to be deleted. The [privacy page](https://deltaforcetracker.com/privacy.html) has the full details.
 
 ## Run from source
 
