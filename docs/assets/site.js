@@ -29,6 +29,14 @@
     box.addEventListener('click', function (e) { if (e.target === box || e.target === img) box.close(); });
   }
 
+  // ---- home page box: pass the name to the Try it page without putting it in the URL
+  var hf = document.getElementById('home-form');
+  if (hf) hf.addEventListener('submit', function (e) {
+    var v = document.getElementById('home-name').value.trim();
+    try { sessionStorage.setItem('df_name', v); } catch (x) {}
+    e.preventDefault(); location.href = 'try.html';
+  });
+
   // ---- try-it demo
   var form = document.getElementById('demo-form');
   if (!form) return;
@@ -102,9 +110,9 @@
       .then(function () { busy = false; if (!input.disabled) btn.disabled = false; });
   });
 
-  // ?name=Foo from the home page form fills the box (the visitor still presses Look up)
+  // A name typed on the home page is handed over in memory (not the address bar)
   try {
-    var q = new URLSearchParams(location.search).get('name');
-    if (q) { input.value = q.slice(0, 24); input.focus(); }
+    var q = sessionStorage.getItem('df_name');
+    if (q) { sessionStorage.removeItem('df_name'); input.value = q.slice(0, 24); input.focus(); }
   } catch (e) {}
 })();
