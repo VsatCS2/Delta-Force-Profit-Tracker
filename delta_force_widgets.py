@@ -641,6 +641,40 @@ def _draw_nav_icon(canvas: tk.Canvas, key: str, cx: float, cy: float,
         canvas.create_line(cx - s * 0.4, cy + s * 0.55, cx + s * 0.05, cy + s * 0.55,
                            fill=color, width=1.6, capstyle="round")
 
+    elif key == "doorcode":
+        # Padlock: filled body, open-top shackle, small keyhole.
+        bw, bh = s * 1.5, s * 1.05
+        top = cy - s * 0.05
+        canvas.create_arc(cx - s * 0.52, cy - s * 1.0, cx + s * 0.52, cy + s * 0.2,
+                          start=0, extent=180, style="arc",
+                          outline=color, width=2.2)
+        canvas.create_rectangle(cx - bw / 2, top, cx + bw / 2, top + bh,
+                                fill=color, outline="")
+        canvas.create_oval(cx - s * 0.13, top + bh * 0.3, cx + s * 0.13,
+                           top + bh * 0.3 + s * 0.26,
+                           fill=canvas.cget("bg"), outline="")
+
+    elif key == "reds":
+        # Cut gem: flat crown on top, point below, one facet line.
+        w, top, mid, bot = s * 1.05, cy - s * 0.8, cy - s * 0.25, cy + s * 0.95
+        canvas.create_polygon(cx - w * 0.62, top, cx + w * 0.62, top,
+                              cx + w, mid, cx, bot, cx - w, mid,
+                              fill=color, outline="")
+        bg = canvas.cget("bg")
+        canvas.create_line(cx - w, mid, cx + w, mid, fill=bg, width=1.4)
+        canvas.create_line(cx - w * 0.3, mid, cx, top, fill=bg, width=1.2)
+        canvas.create_line(cx + w * 0.3, mid, cx, top, fill=bg, width=1.2)
+
+    elif key == "fishing":
+        # Fish: oval body, triangular tail, eye cut out in the bg colour.
+        canvas.create_oval(cx - s * 1.0, cy - s * 0.55, cx + s * 0.55, cy + s * 0.55,
+                           fill=color, outline="")
+        canvas.create_polygon(cx + s * 0.35, cy, cx + s * 1.05, cy - s * 0.6,
+                              cx + s * 1.05, cy + s * 0.6,
+                              fill=color, outline="")
+        canvas.create_oval(cx - s * 0.65, cy - s * 0.2, cx - s * 0.4, cy + s * 0.05,
+                           fill=canvas.cget("bg"), outline="")
+
     elif key == "data_export":
         # Same tray primitive as "updates", arrow pointing the opposite
         # way (up, out of the tray) - export/save, not download.

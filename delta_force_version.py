@@ -17,7 +17,7 @@ version is older than the current one - keep each line short, plain,
 and user-facing (not a commit log).
 """
 
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.1.0"
 
 
 def version_tuple(v: str):
@@ -33,6 +33,11 @@ def version_tuple(v: str):
 
 
 CHANGELOG = {
+    "2.1.0": [
+        "New: Door Codes page. See the private room door code for every map in one place and click a code to copy it. No login needed",
+        "New: Reds page. See every red item you have collected, how many of each, and what they are worth, with names and pictures. You can search it and sort by value, count or name",
+        "New: Fishing page. See your fishing level, total catches, catch rate and best streak, plus every fish you have caught with its picture, grade and your longest and heaviest catch. You can search and sort it, and double-click a fish to see its weights and lengths with dates, where it lives, its recommended bait, the ecology notes you have unlocked, and your catch record",
+    ],
     "2.0.2": [
         "New: DF Tracker now starts with Windows, minimized, on new installs. The installer has a tick box for it (ticked by default) and you can change it any time in Settings \u2192 Startup. Existing installs keep their current setting",
         "Improved: opening DF Tracker while it's already running now brings the existing window to the front instead of starting a second copy",

@@ -94,6 +94,9 @@ class TrackerApp:
         ("maps",      "Maps",      "maps"),
         ("operators", "Operators", "profile"),
         ("matches",   "Matches",   "matches"),
+        ("reds",      "Reds",      "reds"),
+        ("doors",     "Door Codes", "doorcode"),
+        ("fishing",   "Fishing",   "fishing"),
         ("community", "Community", "community"),
         ("lookup",    "Player Lookup", "lookup"),
         ("alerts",    "Price Alerts", "notifications"),
@@ -166,6 +169,25 @@ class TrackerApp:
         self._item_icon_pending = set()
         self._high_value_items = []   # last fetched, from core.recent_high_value_items
         self._weekly_highlights = None  # last fetched, from core.weekly_highlights
+        # Door Codes page (never cached on disk: stale codes mislead).
+        self._door_codes = []
+        self._door_codes_ts = None
+        self._door_codes_busy = False
+        self._door_codes_error = ""
+        # Reds page (collection comes from the cache so it shows offline).
+        self._reds = core.reds_collection()
+        self._reds_busy = False
+        self._reds_error = ""
+        self._reds_sort = "value"
+        self._reds_icon_labels = {}
+        self._reds_search_after = None
+        # Fishing page (collection comes from the cache so it shows offline).
+        self._fishing = core.parse_fishing(core.load_cache().get("fishing"))
+        self._fishing_busy = False
+        self._fishing_error = ""
+        self._fish_sort = "count"
+        self._fish_icon_labels = {}
+        self._fish_search_after = None
 
         self._detail_fetching = set()
         self._detail_windows = {}
@@ -502,6 +524,9 @@ class TrackerApp:
         self._build_operators_section()
         self._build_locked_section()
         self._build_matches_section()
+        self._build_reds_section()
+        self._build_doors_section()
+        self._build_fishing_section()
         self._build_community_section()
         self._build_lookup_section()
         self._build_alerts_section()
@@ -581,10 +606,10 @@ class TrackerApp:
     def _apply_sidebar_density(self):
         lvl = self._sb_tight
         for item in self._nav_items.values():
-            item.configure(height=(46, 40, 34)[lvl])
-            item.pack_configure(pady=(3, 2, 1)[lvl])
-        self._sb_brand.pack_configure(pady=[(26, 20), (16, 10), (10, 6)][lvl])
-        self._sb_divider.pack_configure(pady=[(0, 18), (0, 10), (0, 6)][lvl])
+            item.configure(height=(46, 40, 34, 28)[lvl])
+            item.pack_configure(pady=(3, 2, 1, 0)[lvl])
+        self._sb_brand.pack_configure(pady=[(26, 20), (16, 10), (10, 6), (8, 4)][lvl])
+        self._sb_divider.pack_configure(pady=[(0, 18), (0, 10), (0, 6), (0, 4)][lvl])
         if lvl >= 2:
             self._sb_version.pack_forget()
         else:
@@ -603,7 +628,7 @@ class TrackerApp:
             return
         if avail < 50:
             return
-        if need > avail and self._sb_tight < 2:
+        if need > avail and self._sb_tight < 3:
             self._sb_tight += 1
             self._apply_sidebar_density()
             parent.update_idletasks()
@@ -5216,6 +5241,959 @@ class TrackerApp:
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Door Codes page
+    # ------------------------------------------------------------------
+    DOOR_STALE_SECONDS = 300      # re-fetch on page open if older than this
+
+    def _build_doors_section(self):
+        c = self.colors
+        frame = tk.Frame(self.content, bg=c["BG_TOP"])
+        self._section_frames["doors"] = frame
+
+        self._section_heading(
+            frame, "Door Codes",
+            "The private room door codes for each map. Click a code to copy it.")
+
+        bar = tk.Frame(frame, bg=c["BG_TOP"])
+        bar.pack(fill="x", pady=(0, 16))
+        self._pill_button(bar, "Refresh",
+                          lambda: self.start_door_codes_fetch(force=True),
+                          primary=True, height=34).pack(side="left")
+        self.doors_status = tk.Label(bar, text="", bg=c["BG_TOP"],
+                                     fg=c["FG_MUTED"], font=("Segoe UI", 9))
+        self.doors_status.pack(side="left", padx=14)
+
+        self.doors_grid = tk.Frame(frame, bg=c["BG_TOP"])
+        self.doors_grid.pack(fill="x")
+        for col in range(3):
+            self.doors_grid.columnconfigure(col, weight=1, uniform="doors")
+
+        tk.Label(frame, text="Codes change regularly, so refresh if one doesn't "
+                             "work. No login is needed for this page.",
+                 bg=c["BG_TOP"], fg=c["FG_MUTED"], font=("Segoe UI", 9),
+                 anchor="w", justify="left").pack(fill="x", pady=(16, 0))
+
+    def start_door_codes_fetch(self, force: bool = False):
+        if self._door_codes_busy:
+            return
+        age = (time.time() - self._door_codes_ts) if self._door_codes_ts else None
+        if not force and age is not None and age < self.DOOR_STALE_SECONDS:
+            return
+        self._door_codes_busy = True
+        self._door_codes_error = ""
+        self._render_doors()
+        core.set_debug(self.debug_var.get())
+
+        def worker():
+            try:
+                items = core.pull_door_codes(
+                    on_debug=lambda m: self.msg_queue.put(("debug", m)))
+                self.msg_queue.put(("door_codes_result", (items, None)))
+            except Exception as e:
+                self.msg_queue.put(("door_codes_result", (None, str(e))))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_door_codes_result(self, payload):
+        items, err = payload
+        self._door_codes_busy = False
+        if err:
+            # Keep showing the last good codes, but say they may be old.
+            self._door_codes_error = err
+        else:
+            self._door_codes = items
+            self._door_codes_ts = time.time()
+            self._door_codes_error = ""
+        if self.active_section == "doors":
+            self._render_doors()
+
+    def _refresh_doors(self):
+        self._render_doors()
+        self.start_door_codes_fetch()
+
+    def _copy_door_code(self, name: str, code: str):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(code)
+            self.root.update_idletasks()
+            self._show_toast("Copied", f"{name} door code {code} copied.")
+        except tk.TclError:
+            self.set_status("Couldn't copy to clipboard.")
+
+    def _render_doors(self):
+        if not hasattr(self, "doors_grid"):
+            return
+        c = self.colors
+        for w in self.doors_grid.winfo_children():
+            w.destroy()
+
+        if self._door_codes_busy:
+            status = "Updating..."
+        elif self._door_codes_error and self._door_codes:
+            status = "Couldn't update - these codes may be out of date."
+        elif self._door_codes_ts:
+            status = "Updated " + datetime.fromtimestamp(
+                self._door_codes_ts).strftime("%H:%M:%S")
+        else:
+            status = ""
+        self.doors_status.configure(text=status)
+
+        if not self._door_codes:
+            if self._door_codes_busy:
+                msg = "Loading door codes..."
+            elif self._door_codes_error:
+                msg = ("Couldn't load door codes: "
+                       f"{self._door_codes_error}\nCheck your connection "
+                       "and press Refresh.")
+            else:
+                msg = "No door codes loaded yet."
+            tk.Label(self.doors_grid, text=msg, bg=c["BG_TOP"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 10), anchor="w", justify="left"
+                     ).grid(row=0, column=0, columnspan=3, sticky="w")
+            return
+
+        for i, it in enumerate(self._door_codes):
+            card = Card(self.doors_grid, c, padding=(18, 16), radius=14,
+                        shadow=False)
+            card.grid(row=i // 3, column=i % 3, sticky="nsew",
+                      padx=(0 if i % 3 == 0 else 8, 0 if i % 3 == 2 else 8),
+                      pady=(0, 14))
+            name_l = tk.Label(card.body, text=it["name"].upper(),
+                              bg=c["SURFACE"], fg=c["FG_MUTED"],
+                              font=("Segoe UI", 9, "bold"), anchor="w")
+            name_l.pack(fill="x")
+            code_l = tk.Label(card.body, text=it["code"], bg=c["SURFACE"],
+                              fg=c["ACCENT"], font=("Consolas", 30, "bold"),
+                              anchor="w")
+            code_l.pack(fill="x", pady=(4, 0))
+            hint_l = tk.Label(card.body, text="Click to copy", bg=c["SURFACE"],
+                              fg=c["FG_MUTED"], font=("Segoe UI", 8), anchor="w")
+            hint_l.pack(fill="x")
+            for w in (card, card.body, name_l, code_l, hint_l):
+                w.configure(cursor="hand2")
+                w.bind("<Button-1>", lambda e, n=it["name"], cd=it["code"]:
+                       self._copy_door_code(n, cd))
+
+    # ------------------------------------------------------------------
+    # Reds page (every red item collected)
+    # ------------------------------------------------------------------
+    REDS_STALE_SECONDS = 600
+
+    @staticmethod
+    def _compact_money(v: int) -> str:
+        v = int(v or 0)
+        for div, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
+            if abs(v) >= div:
+                return f"{v / div:.2f}{suffix}"
+        return f"{v:,}"
+
+    def _build_reds_section(self):
+        c = self.colors
+        frame = tk.Frame(self.content, bg=c["BG_TOP"])
+        self._section_frames["reds"] = frame
+
+        self._section_heading(
+            frame, "Reds",
+            "Every red item you have collected, with how many and what they "
+            "are worth.")
+
+        stats = tk.Frame(frame, bg=c["BG_TOP"])
+        stats.pack(fill="x", pady=(0, 14))
+        self.reds_stat_labels = {}
+        for col, (key, label) in enumerate([("total", "TOTAL REDS"),
+                                            ("types", "UNIQUE REDS"),
+                                            ("value", "TOTAL VALUE")]):
+            stats.columnconfigure(col, weight=1, uniform="reds_stats")
+            card = Card(stats, c, padding=(18, 12), radius=14, shadow=False)
+            card.grid(row=0, column=col, sticky="nsew",
+                      padx=(0 if col == 0 else 7, 0 if col == 2 else 7))
+            tk.Label(card.body, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
+            val = tk.Label(card.body, text="—", bg=c["SURFACE"], fg=c["FG"],
+                           font=("Segoe UI Semibold", 20), anchor="w")
+            val.pack(fill="x")
+            self.reds_stat_labels[key] = val
+
+        top = tk.Frame(frame, bg=c["BG_TOP"])
+        top.pack(fill="x", pady=(0, 8))
+        self._pill_button(top, "Refresh",
+                          lambda: self.start_reds_fetch(force=True),
+                          primary=False, height=30).pack(side="right")
+        self.reds_updated_label = tk.Label(top, text="", bg=c["BG_TOP"],
+                                           fg=c["FG_MUTED"], font=("Segoe UI", 9))
+        self.reds_updated_label.pack(side="right", padx=12)
+
+        bar = tk.Frame(frame, bg=c["BG_TOP"])
+        bar.pack(fill="x", pady=(0, 10))
+        tk.Label(bar, text="Search:", bg=c["BG_TOP"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        self.reds_search_var = tk.StringVar()
+        search = tk.Entry(bar, textvariable=self.reds_search_var, width=16,
+                          bg=c["SURFACE_ALT"], fg=c["FG"],
+                          insertbackground=c["FG"], relief="flat", bd=0,
+                          highlightthickness=1,
+                          highlightbackground=c["BORDER"],
+                          highlightcolor=c["ACCENT"], font=("Segoe UI", 10))
+        search.pack(side="left", ipady=5, padx=(0, 14))
+        self.reds_search_var.trace_add("write", self._on_reds_search)
+
+        tk.Label(bar, text="Sort:", bg=c["BG_TOP"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        self._reds_sort_btns = {}
+        for key, label in (("value", "Value"), ("count", "Count"),
+                           ("name", "Name")):
+            b = tk.Label(bar, text=label, padx=12, pady=5, cursor="hand2",
+                         font=("Segoe UI Semibold", 9))
+            b.pack(side="left", padx=(0, 6))
+            b.bind("<Button-1>", lambda e, k=key: self._set_reds_sort(k))
+            self._reds_sort_btns[key] = b
+
+
+        card = Card(frame, c, padding=(10, 8), radius=14, shadow=False)
+        card.pack(fill="both", expand=True)
+        self.reds_canvas = tk.Canvas(card.body, bg=c["SURFACE"],
+                                     highlightthickness=0, bd=0)
+        sb = ttk.Scrollbar(card.body, orient="vertical",
+                           command=self.reds_canvas.yview)
+        self.reds_canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.reds_canvas.pack(side="left", fill="both", expand=True)
+        self.reds_list_frame = tk.Frame(self.reds_canvas, bg=c["SURFACE"])
+        win = self.reds_canvas.create_window((0, 0), window=self.reds_list_frame,
+                                             anchor="nw")
+        self.reds_list_frame.bind(
+            "<Configure>", lambda e: self.reds_canvas.configure(
+                scrollregion=self.reds_canvas.bbox("all")))
+        self.reds_canvas.bind(
+            "<Configure>", lambda e: self.reds_canvas.itemconfigure(win, width=e.width))
+        bind_mousewheel_to_canvas(self.reds_canvas)
+        self._style_reds_sort_buttons()
+
+    def _style_reds_sort_buttons(self):
+        c = self.colors
+        for key, b in self._reds_sort_btns.items():
+            on = key == self._reds_sort
+            b.configure(bg=c["ACCENT"] if on else c["SURFACE_ALT"],
+                        fg=c["BG_TOP"] if on else c["FG"])
+
+    def _set_reds_sort(self, key: str):
+        self._reds_sort = key
+        self._style_reds_sort_buttons()
+        self._render_reds()
+
+    def _on_reds_search(self, *_):
+        if self._reds_search_after is not None:
+            try:
+                self.root.after_cancel(self._reds_search_after)
+            except tk.TclError:
+                pass
+        self._reds_search_after = self.root.after(200, self._render_reds)
+
+    def _refresh_reds(self):
+        self._reds = core.reds_collection()
+        self._render_reds()
+        if not core.have_credentials("dahong"):
+            return
+        ts = core.load_cache().get("dahong_updated_at", "")
+        stale = True
+        if ts:
+            try:
+                stale = (datetime.now() - datetime.fromisoformat(ts)
+                         ).total_seconds() > self.REDS_STALE_SECONDS
+            except ValueError:
+                stale = True
+        if stale:
+            self.start_reds_fetch()
+
+    def start_reds_fetch(self, force: bool = False):
+        if self._reds_busy:
+            return
+        if not core.have_credentials("dahong"):
+            if force:
+                messagebox.showinfo("Not logged in",
+                                    self._login_options_text() + " first.",
+                                    parent=self.root)
+            return
+        self._reds_busy = True
+        self._reds_error = ""
+        self._render_reds()
+        core.set_debug(self.debug_var.get())
+
+        def worker():
+            try:
+                core.pull_reds(on_debug=lambda m: self.msg_queue.put(("debug", m)))
+                self.msg_queue.put(("reds_result", None))
+            except Exception as e:
+                self.msg_queue.put(("reds_result", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_reds_result(self, err):
+        self._reds_busy = False
+        self._reds_error = err or ""
+        if not err:
+            self._reds = core.reds_collection()
+        if self.active_section == "reds":
+            self._render_reds()
+
+    def _reds_icon_arrived(self, item_id: str):
+        lbl = self._reds_icon_labels.get(item_id)
+        photo = self._item_icon_cache.get(item_id)
+        if lbl is None or not photo:
+            return
+        try:
+            lbl.configure(image=photo, text="")
+            lbl.image = photo
+        except tk.TclError:
+            pass
+
+    def _render_reds(self):
+        self._reds_search_after = None
+        if not hasattr(self, "reds_list_frame"):
+            return
+        c = self.colors
+        data = self._reds
+        self.reds_stat_labels["total"].configure(
+            text=f"{data['total_count']:,}" if data["items"] else "—")
+        self.reds_stat_labels["types"].configure(
+            text=f"{data['type_count']:,}" if data["items"] else "—")
+        self.reds_stat_labels["value"].configure(
+            text=self._compact_money(data["total_value"]) if data["items"] else "—")
+
+        ts = core.load_cache().get("dahong_updated_at", "")
+        rel = core.format_relative_time(ts)
+        if self._reds_busy:
+            self.reds_updated_label.configure(text="Updating...")
+        elif self._reds_error:
+            self.reds_updated_label.configure(text="Couldn't update")
+        else:
+            self.reds_updated_label.configure(text=f"Updated {rel}" if rel else "")
+
+        for w in self.reds_list_frame.winfo_children():
+            w.destroy()
+        self._reds_icon_labels = {}
+        self.reds_canvas.yview_moveto(0)
+
+        items = list(data["items"])
+        q = self.reds_search_var.get().strip().lower()
+        if q:
+            items = [i for i in items if q in i["name"].lower()]
+        if self._reds_sort == "count":
+            items.sort(key=lambda i: (i["count"], i["total_value"]), reverse=True)
+        elif self._reds_sort == "name":
+            items.sort(key=lambda i: i["name"].lower())
+        # "value" is already the order reds_collection() returns.
+
+        if not items:
+            if not core.have_credentials("dahong"):
+                msg = "Not logged in yet. " + self._login_options_text() + "."
+            elif self._reds_busy:
+                msg = "Loading your reds..."
+            elif self._reds_error and not data["items"]:
+                msg = (f"Couldn't load your reds: {self._reds_error}\n"
+                       "Press Refresh to try again.")
+            elif q:
+                msg = "No reds match that search."
+            else:
+                msg = "No reds collected yet."
+            tk.Label(self.reds_list_frame, text=msg, bg=c["SURFACE"],
+                     fg=c["FG_MUTED"], font=("Segoe UI", 10), anchor="w",
+                     justify="left", wraplength=700).pack(fill="x", padx=10, pady=10)
+            return
+
+        for i, it in enumerate(items):
+            row = tk.Frame(self.reds_list_frame, bg=c["SURFACE"])
+            row.pack(fill="x", padx=6)
+            if i > 0:
+                tk.Frame(self.reds_list_frame, bg=c["BORDER_SOFT"],
+                         height=1).pack(fill="x", padx=6, before=row)
+
+            box = tk.Frame(row, bg=c["SURFACE"], width=48, height=48)
+            box.pack(side="left", padx=(0, 12), pady=6)
+            box.pack_propagate(False)
+            icon = tk.Label(box, bg=c["SURFACE"], fg=c["FG_MUTED"], text="")
+            icon.pack(expand=True)
+            self._reds_icon_labels[it["item_id"]] = icon
+            photo = self._item_icon_cache.get(it["item_id"])
+            if photo:
+                icon.configure(image=photo)
+                icon.image = photo
+            else:
+                self._queue_item_icon(it["item_id"], it["image_url"])
+
+            tk.Label(row, text=core.fmt_money(it["total_value"]), bg=c["SURFACE"],
+                     fg=c["POSITIVE"], font=("Segoe UI Semibold", 11),
+                     anchor="e").pack(side="right", padx=(8, 4))
+
+            col = tk.Frame(row, bg=c["SURFACE"])
+            col.pack(side="left", fill="both", expand=True)
+            name_l = tk.Label(col, text=it["name"], bg=c["SURFACE"], fg=c["FG"],
+                              font=("Segoe UI", 10), anchor="w", justify="left")
+            name_l.pack(fill="x", pady=(8, 0))
+            col.bind("<Configure>", lambda e, w=name_l: w.configure(
+                wraplength=max(120, e.width - 4)))
+            sub = f"×{it['count']}  ·  {core.fmt_money(it['unit_value'])} each"
+            tk.Label(col, text=sub, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(0, 6))
+
+    # ------------------------------------------------------------------
+    # Fishing page
+    # ------------------------------------------------------------------
+    FISHING_STALE_SECONDS = 600
+
+    def _build_fishing_section(self):
+        c = self.colors
+        frame = tk.Frame(self.content, bg=c["BG_TOP"])
+        self._section_frames["fishing"] = frame
+
+        self._section_heading(
+            frame, "Fishing",
+            "Your fishing collection: every fish you have caught and your "
+            "best catches.")
+
+        stats = tk.Frame(frame, bg=c["BG_TOP"])
+        stats.pack(fill="x", pady=(0, 6))
+        self.fish_stat_labels = {}
+        keys = [("level", "FISHING LEVEL"), ("catches", "FISH CAUGHT"),
+                ("species", "DIFFERENT FISH"), ("rate", "CATCH RATE"),
+                ("streak", "BEST STREAK"), ("days", "DAYS FISHED")]
+        for i, (key, label) in enumerate(keys):
+            r, col = divmod(i, 3)
+            stats.columnconfigure(col, weight=1, uniform="fish_stats")
+            card = Card(stats, c, padding=(16, 8), radius=14, shadow=False)
+            card.grid(row=r, column=col, sticky="nsew",
+                      padx=(0 if col == 0 else 6, 0 if col == 2 else 6),
+                      pady=(0, 10))
+            tk.Label(card.body, text=label, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x")
+            val = tk.Label(card.body, text="—", bg=c["SURFACE"], fg=c["FG"],
+                           font=("Segoe UI Semibold", 16), anchor="w")
+            val.pack(fill="x")
+            self.fish_stat_labels[key] = val
+
+        self.fish_highlights = tk.Label(frame, text="", bg=c["BG_TOP"],
+                                        fg=c["FG_MUTED"], font=("Segoe UI", 9),
+                                        anchor="w", justify="left")
+        self.fish_highlights.pack(fill="x", pady=(0, 6))
+        self.fish_highlights.bind(
+            "<Configure>", lambda e: e.widget.configure(wraplength=e.width))
+        top = tk.Frame(frame, bg=c["BG_TOP"])
+        top.pack(fill="x", pady=(0, 8))
+        self._pill_button(top, "Refresh",
+                          lambda: self.start_fishing_fetch(force=True),
+                          primary=False, height=30).pack(side="right")
+        self.fish_updated_label = tk.Label(top, text="", bg=c["BG_TOP"],
+                                           fg=c["FG_MUTED"], font=("Segoe UI", 9))
+        self.fish_updated_label.pack(side="right", padx=12)
+        tk.Label(top, text="Double-click a fish for details", bg=c["BG_TOP"],
+                 fg=c["FG_MUTED"], font=("Segoe UI", 9)).pack(side="left")
+
+        bar = tk.Frame(frame, bg=c["BG_TOP"])
+        bar.pack(fill="x", pady=(0, 10))
+        tk.Label(bar, text="Search:", bg=c["BG_TOP"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        self.fish_search_var = tk.StringVar()
+        search = tk.Entry(bar, textvariable=self.fish_search_var, width=9,
+                          bg=c["SURFACE_ALT"], fg=c["FG"],
+                          insertbackground=c["FG"], relief="flat", bd=0,
+                          highlightthickness=1,
+                          highlightbackground=c["BORDER"],
+                          highlightcolor=c["ACCENT"], font=("Segoe UI", 10))
+        search.pack(side="left", ipady=5, padx=(0, 12))
+        self.fish_search_var.trace_add("write", self._on_fish_search)
+
+        tk.Label(bar, text="Sort:", bg=c["BG_TOP"], fg=c["FG_MUTED"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        self._fish_sort_btns = {}
+        for key, label in (("count", "Caught"), ("grade", "Grade"),
+                           ("length", "Length"), ("name", "Name")):
+            b = tk.Label(bar, text=label, padx=7, pady=5, cursor="hand2",
+                         font=("Segoe UI Semibold", 9))
+            b.pack(side="left", padx=(0, 4))
+            b.bind("<Button-1>", lambda e, k=key: self._set_fish_sort(k))
+            self._fish_sort_btns[key] = b
+
+        card = Card(frame, c, padding=(10, 8), radius=14, shadow=False)
+        card.pack(fill="both", expand=True)
+        self.fish_canvas = tk.Canvas(card.body, bg=c["SURFACE"],
+                                     highlightthickness=0, bd=0)
+        sb = ttk.Scrollbar(card.body, orient="vertical",
+                           command=self.fish_canvas.yview)
+        self.fish_canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.fish_canvas.pack(side="left", fill="both", expand=True)
+        self.fish_list_frame = tk.Frame(self.fish_canvas, bg=c["SURFACE"])
+        win = self.fish_canvas.create_window((0, 0), window=self.fish_list_frame,
+                                             anchor="nw")
+        self.fish_list_frame.bind(
+            "<Configure>", lambda e: self.fish_canvas.configure(
+                scrollregion=self.fish_canvas.bbox("all")))
+        self.fish_canvas.bind(
+            "<Configure>", lambda e: self.fish_canvas.itemconfigure(win, width=e.width))
+        bind_mousewheel_to_canvas(self.fish_canvas)
+        self._style_fish_sort_buttons()
+
+    def _style_fish_sort_buttons(self):
+        c = self.colors
+        for key, b in self._fish_sort_btns.items():
+            on = key == self._fish_sort
+            b.configure(bg=c["ACCENT"] if on else c["SURFACE_ALT"],
+                        fg=c["BG_TOP"] if on else c["FG"])
+
+    def _set_fish_sort(self, key: str):
+        self._fish_sort = key
+        self._style_fish_sort_buttons()
+        self._render_fishing()
+
+    def _on_fish_search(self, *_):
+        if self._fish_search_after is not None:
+            try:
+                self.root.after_cancel(self._fish_search_after)
+            except tk.TclError:
+                pass
+        self._fish_search_after = self.root.after(200, self._render_fishing)
+
+    def _load_fishing_view(self):
+        cache = core.load_cache()
+        self._fishing = core.parse_fishing(cache.get("fishing"))
+
+    def _refresh_fishing(self):
+        self._load_fishing_view()
+        self._render_fishing()
+        if not core.have_credentials("fishing"):
+            return
+        ts = core.load_cache().get("fishing_updated_at", "")
+        stale = True
+        if ts:
+            try:
+                stale = (datetime.now() - datetime.fromisoformat(ts)
+                         ).total_seconds() > self.FISHING_STALE_SECONDS
+            except ValueError:
+                stale = True
+        # Also fetch when the saved fish list is out of date or incomplete
+        # (e.g. after an update), so the new details fill in by themselves.
+        if not stale and not core.fish_catalog_is_current():
+            stale = True
+        if stale:
+            self.start_fishing_fetch()
+
+    def start_fishing_fetch(self, force: bool = False):
+        if self._fishing_busy:
+            return
+        if not core.have_credentials("fishing"):
+            if force:
+                messagebox.showinfo("Not logged in",
+                                    self._login_options_text() + " first.",
+                                    parent=self.root)
+            return
+        self._fishing_busy = True
+        self._fishing_error = ""
+        self._render_fishing()
+        core.set_debug(self.debug_var.get())
+
+        def worker():
+            try:
+                core.pull_fishing(on_debug=lambda m: self.msg_queue.put(("debug", m)))
+                self.msg_queue.put(("fishing_result", None))
+            except Exception as e:
+                self.msg_queue.put(("fishing_result", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_fishing_result(self, err):
+        self._fishing_busy = False
+        self._fishing_error = err or ""
+        if not err:
+            self._load_fishing_view()
+        if self.active_section == "fishing":
+            self._render_fishing()
+
+    # ------------------------------------------------------------------
+    # Fish detail window (double-click a fish)
+    # ------------------------------------------------------------------
+    # Grade -> (name, colour). The names are the game's own fish page order
+    # (white, green, blue, purple, gold, red).
+    FISH_QUALITY = {1: ("White", "#c9ced6"), 2: ("Green", "#58c27d"),
+                    3: ("Blue", "#4f9cf0"), 4: ("Purple", "#a779e0"),
+                    5: ("Gold", "#e6b43c"), 6: ("Red", "#e5534b")}
+
+    @staticmethod
+    def _fish_date(ts: int, with_time: bool = False) -> str:
+        if not ts or ts <= 0:
+            return "—"
+        try:
+            return datetime.fromtimestamp(int(ts)).strftime(
+                "%Y.%m.%d %H:%M" if with_time else "%Y.%m.%d")
+        except (OverflowError, OSError, ValueError):
+            return "—"
+
+    def _bind_fish_row(self, widget, item):
+        widget.bind("<Double-Button-1>",
+                    lambda e, it=item: self._open_fish_detail(it))
+        for child in widget.winfo_children():
+            self._bind_fish_row(child, item)
+
+    def _open_fish_detail(self, it):
+        old = getattr(self, "_fish_detail_win", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except tk.TclError:
+                pass
+        c = self.colors
+        win = tk.Toplevel(self.root)
+        self._fish_detail_win = win
+        win.title(it["name"])
+        win.configure(bg=c["SURFACE"])
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.bind("<Escape>", lambda e: win.destroy())
+        win._fish = it
+        win._bait_labels = {}
+
+        qname, qcolor = self.FISH_QUALITY.get(it["grade"], (f"Grade {it['grade']}", c["FG_MUTED"]))
+
+        head = tk.Frame(win, bg=c["SURFACE"])
+        head.pack(fill="x", padx=24, pady=(18, 4))
+        dia = tk.Canvas(head, width=16, height=16, bg=c["SURFACE"],
+                        highlightthickness=0)
+        dia.create_polygon(8, 1, 15, 8, 8, 15, 1, 8, fill=qcolor, outline="")
+        dia.pack(side="left", padx=(0, 8))
+        tk.Label(head, text=it["name"], bg=c["SURFACE"], fg=c["FG"],
+                 font=("Segoe UI Semibold", 15), anchor="w").pack(side="left")
+
+        tabs = tk.Frame(head, bg=c["SURFACE"])
+        tabs.pack(side="right")
+
+        sub = " · ".join(x for x in (it.get("size_category"),
+                                     it.get("water_category")) if x)
+        if sub:
+            tk.Label(win, text=sub, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 9), anchor="w").pack(
+                fill="x", padx=24, pady=(0, 6))
+
+        body = tk.Frame(win, bg=c["SURFACE"])
+        body.pack(fill="both", expand=True, padx=24, pady=(6, 20))
+
+        left = tk.Frame(body, bg=c["SURFACE"], width=230, height=170)
+        left.pack(side="left", padx=(0, 22))
+        left.pack_propagate(False)
+        win._img_label = tk.Label(left, bg=c["SURFACE"], fg=c["FG_MUTED"], text="")
+        win._img_label.pack(expand=True)
+        right = tk.Frame(body, bg=c["SURFACE"], width=380)
+        right.pack(side="left", fill="both", expand=True)
+
+        def stat(parent, caption, value, row, col):
+            box = tk.Frame(parent, bg=c["SURFACE_ALT"], padx=14, pady=8)
+            box.grid(row=row, column=col, sticky="nsew", padx=(0, 8), pady=(0, 8))
+            tk.Label(box, text=caption, bg=c["SURFACE_ALT"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 8), anchor="w").pack(fill="x")
+            tk.Label(box, text=value, bg=c["SURFACE_ALT"], fg=c["FG"],
+                     font=("Segoe UI Semibold", 14), anchor="w").pack(fill="x")
+
+        def heading(parent, text, top=0):
+            tk.Label(parent, text=text, bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 9, "bold"), anchor="w").pack(
+                fill="x", pady=(top, 6))
+
+        def show_file(frame):
+            heading(frame, "BASIC DATA")
+            grid = tk.Frame(frame, bg=c["SURFACE"])
+            grid.pack(fill="x")
+            grid.columnconfigure(0, weight=1, uniform="fd")
+            grid.columnconfigure(1, weight=1, uniform="fd")
+            stat(grid, f"Max weight · {self._fish_date(it['max_weight_at'])}",
+                 f"{it['max_weight']:.3f} KG", 0, 0)
+            stat(grid, f"Min weight · {self._fish_date(it['min_weight_at'])}",
+                 f"{it['min_weight']:.3f} KG", 0, 1)
+            stat(grid, f"Max length · {self._fish_date(it['max_length_at'])}",
+                 f"{it['max_length']:.1f} CM", 1, 0)
+            stat(grid, f"Min length · {self._fish_date(it['min_length_at'])}",
+                 f"{it['min_length']:.1f} CM", 1, 1)
+            if it.get("water_names"):
+                heading(frame, "DISTRIBUTION", top=6)
+                chips = tk.Frame(frame, bg=c["SURFACE"])
+                chips.pack(fill="x")
+                for n in it["water_names"]:
+                    tk.Label(chips, text=n, bg=c["SURFACE_ALT"], fg=c["FG"],
+                             font=("Segoe UI", 9), padx=10, pady=4).pack(
+                        side="left", padx=(0, 6), pady=(0, 4))
+            win._bait_labels = {}
+            if it.get("baits"):
+                heading(frame, "RECOMMENDED BAIT", top=6)
+                brow = tk.Frame(frame, bg=c["SURFACE"])
+                brow.pack(fill="x")
+                for b in it["baits"]:
+                    chip = tk.Frame(brow, bg=c["SURFACE_ALT"], padx=8, pady=4)
+                    chip.pack(side="left", padx=(0, 6), pady=(0, 4))
+                    ic = tk.Label(chip, bg=c["SURFACE_ALT"])
+                    ic.pack(side="left")
+                    tk.Label(chip, text=b["name"], bg=c["SURFACE_ALT"], fg=c["FG"],
+                             font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
+                    win._bait_labels[b["id"]] = ic
+                    photo = self._item_icon_cache.get(b["id"])
+                    if photo:
+                        ic.configure(image=photo)
+                        ic.image = photo
+                    else:
+                        self._queue_item_icon(b["id"], b["image_url"])
+
+        def show_record(frame):
+            heading(frame, "ACQUISITION RECORDS")
+            grid = tk.Frame(frame, bg=c["SURFACE"])
+            grid.pack(fill="x")
+            grid.columnconfigure(0, weight=1, uniform="fr")
+            grid.columnconfigure(1, weight=1, uniform="fr")
+            stat(grid, "Highest quality", qname, 0, 0)
+            stat(grid, "Total catches", f"{it['count']:,}", 0, 1)
+            first = tk.Frame(frame, bg=c["SURFACE_ALT"], padx=14, pady=8)
+            first.pack(fill="x", pady=(0, 8), padx=(0, 8))
+            tk.Label(first, text="First catch", bg=c["SURFACE_ALT"],
+                     fg=c["FG_MUTED"], font=("Segoe UI", 8), anchor="w").pack(fill="x")
+            tk.Label(first, text=self._fish_date(it["first_caught"], True),
+                     bg=c["SURFACE_ALT"], fg=c["FG"],
+                     font=("Segoe UI Semibold", 14), anchor="w").pack(fill="x")
+
+        def show_ecology(frame):
+            holder = tk.Frame(frame, bg=c["SURFACE"])
+            holder.pack(fill="both", expand=True)
+            sb = ttk.Scrollbar(holder, orient="vertical")
+            txt = tk.Text(holder, wrap="word", bg=c["SURFACE"], fg=c["FG_MUTED"],
+                          relief="flat", bd=0, highlightthickness=0, height=12,
+                          width=46, font=("Segoe UI", 9), padx=2, pady=2,
+                          cursor="arrow", yscrollcommand=sb.set)
+            sb.configure(command=txt.yview)
+            txt.tag_configure("title", foreground=c["FG"],
+                              font=("Segoe UI Semibold", 11), spacing1=8, spacing3=3)
+            txt.tag_configure("title_locked", foreground=c["FG_MUTED"],
+                              font=("Segoe UI Semibold", 11), spacing1=8, spacing3=3)
+            txt.tag_configure("locked", foreground=c["FG_MUTED"],
+                              font=("Segoe UI", 9, "italic"))
+            for blk in it["ecology"]:
+                locked = blk.get("locked")
+                if blk.get("title"):
+                    txt.insert("end", blk["title"] + "\n",
+                               "title_locked" if locked else "title")
+                if blk.get("text"):
+                    txt.insert("end", blk["text"] + "\n", "locked" if locked else ())
+            txt.configure(state="disabled")
+            sb.pack(side="right", fill="y")
+            txt.pack(side="left", fill="both", expand=True)
+
+        pages = [("file", "File", show_file)]
+        if it.get("ecology"):
+            pages.append(("ecology", "Ecology", show_ecology))
+        pages.append(("record", "Record", show_record))
+        buttons = {}
+
+        def select(key):
+            for k, b in buttons.items():
+                on = k == key
+                b.configure(bg=c["ACCENT"] if on else c["SURFACE_ALT"],
+                            fg=c["BG_TOP"] if on else c["FG"])
+            for w in right.winfo_children():
+                w.destroy()
+            dict((k, fn) for k, _, fn in pages)[key](right)
+
+        for key, label, _fn in pages:
+            b = tk.Label(tabs, text=label, padx=12, pady=5, cursor="hand2",
+                         font=("Segoe UI Semibold", 9))
+            b.pack(side="left", padx=(4, 0))
+            b.bind("<Button-1>", lambda e, k=key: select(k))
+            buttons[key] = b
+        win._select = select
+        select("file")
+
+        # Large picture: reuse the copy the list already downloaded, else
+        # fetch it in the background (never on the UI thread).
+        uid, url = it["unique_id"], it["image_url"]
+        disk = self._item_icon_disk_path(uid)
+        data = None
+        try:
+            if disk.exists():
+                data = disk.read_bytes()
+        except OSError:
+            data = None
+        if data:
+            self._set_fish_detail_image(win, data)
+        elif url:
+            def worker():
+                self.msg_queue.put(("fish_detail_icon",
+                                    (uid, self._load_item_icon_bytes(uid, url))))
+            threading.Thread(target=worker, daemon=True).start()
+
+        # Fixed size so the window doesn't jump around between tabs.
+        w, h = 700, 450
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - w) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - h) // 3)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.focus_set()
+
+    def _set_fish_detail_image(self, win, data):
+        if not data or not HAVE_PIL:
+            return
+        try:
+            img = Image.open(io.BytesIO(data)).convert("RGBA")
+            img.thumbnail((220, 160), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            win._img_label.configure(image=photo)
+            win._photo = photo
+        except Exception:
+            pass
+
+    def _fish_bait_icon_arrived(self, item_id: str):
+        win = getattr(self, "_fish_detail_win", None)
+        try:
+            if win is None or not win.winfo_exists():
+                return
+            lbl = getattr(win, "_bait_labels", {}).get(item_id)
+            photo = self._item_icon_cache.get(item_id)
+            if lbl is not None and photo:
+                lbl.configure(image=photo)
+                lbl.image = photo
+        except tk.TclError:
+            pass
+
+    def _on_fish_detail_icon(self, payload):
+        uid, data = payload
+        win = getattr(self, "_fish_detail_win", None)
+        try:
+            if win is None or not win.winfo_exists():
+                return
+            if win._fish["unique_id"] == uid:
+                self._set_fish_detail_image(win, data)
+        except tk.TclError:
+            pass
+
+    def _fish_icon_arrived(self, item_id: str):
+        lbl = self._fish_icon_labels.get(item_id)
+        photo = self._item_icon_cache.get(item_id)
+        if lbl is None or not photo:
+            return
+        try:
+            lbl.configure(image=photo, text="")
+            lbl.image = photo
+        except tk.TclError:
+            pass
+
+    def _render_fishing(self):
+        self._fish_search_after = None
+        if not hasattr(self, "fish_list_frame"):
+            return
+        c = self.colors
+        d = self._fishing
+        has = d["has_data"]
+        sl = self.fish_stat_labels
+        sl["level"].configure(text=str(d["level"]) if has else "—")
+        sl["catches"].configure(text=f"{d['catches']:,}" if has else "—")
+        if has:
+            tot = d["species_total"]
+            sl["species"].configure(
+                text=f"{d['species_caught']} / {tot}" if tot else str(d["species_caught"]))
+        else:
+            sl["species"].configure(text="—")
+        sl["rate"].configure(text=f"{d['catch_rate']:.1f}%" if has else "—")
+        sl["streak"].configure(text=str(d["best_streak"]) if has else "—")
+        sl["days"].configure(text=str(d["days"]) if has else "—")
+
+        bits = []
+        if d["rarest"]:
+            bits.append(f"Rarest catch: {d['rarest']['name']}")
+        if d["most_caught"]:
+            bits.append(f"Most caught: {d['most_caught']['name']} "
+                        f"(×{d['most_caught']['count']:,})")
+        if has and d["longest_fight_s"]:
+            bits.append(f"Longest fight: {d['longest_fight_s']:.1f}s")
+        self.fish_highlights.configure(text="   ·   ".join(bits))
+
+        ts = core.load_cache().get("fishing_updated_at", "")
+        rel = core.format_relative_time(ts)
+        if self._fishing_busy:
+            self.fish_updated_label.configure(text="Updating...")
+        elif self._fishing_error:
+            self.fish_updated_label.configure(text="Couldn't update")
+        else:
+            self.fish_updated_label.configure(text=f"Updated {rel}" if rel else "")
+
+        for w in self.fish_list_frame.winfo_children():
+            w.destroy()
+        self._fish_icon_labels = {}
+        self.fish_canvas.yview_moveto(0)
+
+        items = list(d["fish"])
+        q = self.fish_search_var.get().strip().lower()
+        if q:
+            items = [i for i in items if q in i["name"].lower()]
+        key = self._fish_sort
+        if key == "grade":
+            items.sort(key=lambda i: (i["grade"], i["count"]), reverse=True)
+        elif key == "length":
+            items.sort(key=lambda i: i["max_length"], reverse=True)
+        elif key == "name":
+            items.sort(key=lambda i: i["name"].lower())
+        # "count" is already the order parse_fishing() returns.
+
+        if not items:
+            if not core.have_credentials("fishing"):
+                msg = "Not logged in yet. " + self._login_options_text() + "."
+            elif self._fishing_busy:
+                msg = "Loading your fishing collection..."
+            elif self._fishing_error and not has:
+                msg = (f"Couldn't load your fishing collection: "
+                       f"{self._fishing_error}\nPress Refresh to try again.")
+            elif q:
+                msg = "No fish match that search."
+            else:
+                msg = "No fish caught yet."
+            tk.Label(self.fish_list_frame, text=msg, bg=c["SURFACE"],
+                     fg=c["FG_MUTED"], font=("Segoe UI", 10), anchor="w",
+                     justify="left", wraplength=700).pack(fill="x", padx=10, pady=10)
+            return
+
+        for i, it in enumerate(items):
+            row = tk.Frame(self.fish_list_frame, bg=c["SURFACE"])
+            row.pack(fill="x", padx=6)
+            if i > 0:
+                tk.Frame(self.fish_list_frame, bg=c["BORDER_SOFT"],
+                         height=1).pack(fill="x", padx=6, before=row)
+
+            box = tk.Frame(row, bg=c["SURFACE"], width=48, height=48)
+            box.pack(side="left", padx=(0, 12), pady=6)
+            box.pack_propagate(False)
+            icon = tk.Label(box, bg=c["SURFACE"], fg=c["FG_MUTED"], text="")
+            icon.pack(expand=True)
+            self._fish_icon_labels[it["unique_id"]] = icon
+            photo = self._item_icon_cache.get(it["unique_id"])
+            if photo:
+                icon.configure(image=photo)
+                icon.image = photo
+            else:
+                self._queue_item_icon(it["unique_id"], it["image_url"])
+
+            tk.Label(row, text=f"×{it['count']:,}", bg=c["SURFACE"], fg=c["FG"],
+                     font=("Segoe UI Semibold", 12), anchor="e"
+                     ).pack(side="right", padx=(8, 8))
+
+            col = tk.Frame(row, bg=c["SURFACE"])
+            col.pack(side="left", fill="both", expand=True)
+            name_l = tk.Label(col, text=it["name"], bg=c["SURFACE"], fg=c["FG"],
+                              font=("Segoe UI", 10), anchor="w", justify="left")
+            name_l.pack(fill="x", pady=(8, 0))
+            col.bind("<Configure>", lambda e, w=name_l: w.configure(
+                wraplength=max(120, e.width - 4)))
+            grade_col = (c["ACCENT"] if it["grade"] >= 5 else
+                         c["POSITIVE"] if it["grade"] == 4 else c["FG_MUTED"])
+            sub = tk.Frame(col, bg=c["SURFACE"])
+            sub.pack(fill="x", pady=(0, 6))
+            tk.Label(sub, text=f"Grade {it['grade']}", bg=c["SURFACE"],
+                     fg=grade_col, font=("Segoe UI", 8)).pack(side="left")
+            tk.Label(sub, text=(f"   ·   longest {it['max_length']:.1f} cm   ·   "
+                                f"heaviest {it['max_weight']:.2f} kg"),
+                     bg=c["SURFACE"], fg=c["FG_MUTED"],
+                     font=("Segoe UI", 8)).pack(side="left")
+            self._bind_fish_row(row, it)
+
     def _rerender_section(self, key):
         if key == "overview":
             self._refresh_overview()
@@ -5227,6 +6205,12 @@ class TrackerApp:
             self._refresh_operators()
         elif key == "matches":
             self._refresh_matches()
+        elif key == "reds":
+            self._refresh_reds()
+        elif key == "doors":
+            self._refresh_doors()
+        elif key == "fishing":
+            self._refresh_fishing()
         elif key == "community":
             self._refresh_community_status_ui()
             self._render_community_leaderboard()
@@ -6839,9 +7823,14 @@ class TrackerApp:
                     item_id, data = payload
                     self._item_icon_pending.discard(item_id)
                     self._install_item_icon_bytes(item_id, data)
+                    self._fish_bait_icon_arrived(item_id)
                     if self.active_section == "overview":
                         self._render_high_value_items()
                         self._render_weekly_highlights()
+                    elif self.active_section == "reds":
+                        self._reds_icon_arrived(item_id)
+                    elif self.active_section == "fishing":
+                        self._fish_icon_arrived(item_id)
                 elif kind == "done":
                     self.rows = core.build_rows(payload)
                     self._last_refresh_ts = datetime.now()
@@ -6874,6 +7863,14 @@ class TrackerApp:
                         self._render_high_value_items()
                     self.set_status(f"High-value items updated "
                                     f"{datetime.now().strftime('%H:%M:%S')}.")
+                elif kind == "door_codes_result":
+                    self._on_door_codes_result(payload)
+                elif kind == "reds_result":
+                    self._on_reds_result(payload)
+                elif kind == "fish_detail_icon":
+                    self._on_fish_detail_icon(payload)
+                elif kind == "fishing_result":
+                    self._on_fishing_result(payload)
                 elif kind == "weekly_report_done":
                     self._weekly_highlights = core.weekly_highlights()
                     if self.active_section == "overview":

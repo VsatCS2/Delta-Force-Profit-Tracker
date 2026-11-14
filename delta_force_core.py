@@ -341,6 +341,17 @@ MYDATA_URL = "https://sg-act.playerinfinite.com/api/proxy/logicial/DfTools/GetMy
 MATCHDETAIL_URL = "https://sg-act.playerinfinite.com/api/proxy/logicial/DfTools/GetMatchDetail"
 ASSETCALENDAR_URL = "https://sg-act.playerinfinite.com/api/proxy/logicial/DfTools/GetAssetWeekCalendar"
 WEEKLYREPORT_URL = "https://sg-act.playerinfinite.com/api/proxy/logicial/DfWeeklyReport/GetWeeklyReportSolData"
+DOORCODES_URL = "https://sg-act.playerinfinite.com/api/proxy_direct/logicial/DfTools/GetPrivateRoomKey"
+DAHONG_URL = "https://sg-act.playerinfinite.com/api/proxy/logicial/DfTools/GetDahongPoster"
+FISHING_URL = "https://sg-apps.vasdgame.com/ide/?instanceid=4012871"
+FISHING_CHART_ID = "100018977"
+FISHING_IDE_TOKEN = "HQKIrg"
+FISHING_AREA = "66"      # sArea the game site itself sends (see fetch_fishing)
+FISH_CATALOG_URL = "https://www.playdeltaforce.com/basic_info/fishes_en.js"
+FISH_BAITS_URL = "https://www.playdeltaforce.com/basic_info/fishing_baits_en.js"
+FISH_ECOLOGY_URL = "https://www.playdeltaforce.com/basic_info/fishing_ecology_en.js"
+FISH_CATALOG_FILE = APP_DATA_DIR / "fish_catalog.json"
+FISH_CATALOG_MAX_AGE = 7 * 24 * 3600
 
 PAGE_SIZE = 20
 REQUEST_DELAY_SECONDS = 0.8   # base delay between pages; throttle window is ~1s
@@ -1050,6 +1061,98 @@ def fetch_weekly_report(on_debug=None) -> dict:
     return _get_json(WEEKLYREPORT_URL, params, on_debug=on_debug)
 
 
+def fetch_door_codes(on_debug=None) -> dict:
+    """GetPrivateRoomKey: today's private-room door codes, one per map.
+    Public endpoint ("proxy_direct") - needs no login, no params. Shape:
+        data: {"zero_dam": "2258", "az3": "8025", ...}
+    Codes are strings and can start with 0 ("0831"), so they must never
+    be turned into numbers."""
+    return _get_json(DOORCODES_URL, {}, on_debug=on_debug)
+
+
+def fetch_dahong(on_debug=None) -> dict:
+    """GetDahongPoster: every red (grade-6) item the player has ever
+    collected. Plain GET with the same six account fields as the weekly
+    report (no signature, no body). Shape:
+        data.high_value_collection_list: [{item_id, item_count,
+            item_value}, ...]   (item_value is a numeric STRING: the price of
+            ONE copy, not the stack - confirmed by the player)
+        data.overview: {dahong_total_count, dahong_total_value (string),
+            dahong_type_count}"""
+    refresh_credentials_from_browser()
+    require_credentials("dahong")
+
+    c = _resolve_credentials("dahong")
+    params = {
+        "openid": c["openid"], "token": c["token"], "game_id": c["game_id"],
+        "channel": c["channel"], "account_type": c["account_type"],
+    }
+    return _get_json(DAHONG_URL, params, on_debug=on_debug)
+
+
+def fetch_fishing(on_debug=None) -> dict:
+    """The fishing collection ("Fish Collection" event page on the game
+    site). A form POST to the site's IDE service using the same openid/
+    token as everything else - no signature needed (verified live; the
+    other flows on that service need signed params and are not used).
+    Returns the inner data dict (see parse_fishing for the shape).
+
+    sArea is the region the game site sends for the player. 66 is what it
+    sent for the account this was built against; if another region ever
+    answers with an error here, this is the first thing to check."""
+    from urllib.parse import quote
+
+    def dbg(msg):
+        if _debug and on_debug:
+            on_debug(msg)
+
+    refresh_credentials_from_browser()
+    require_credentials("fishing")
+    c = _resolve_credentials("fishing")
+    openid, token = str(c["openid"]), str(c["token"])
+    fields = [
+        ("iChartId", FISHING_CHART_ID), ("sIdeToken", FISHING_IDE_TOKEN),
+        ("sLanguage", "en"), ("e_code", "0"), ("g_code", "0"),
+        ("eas_url", quote("https://www.playdeltaforce.com/act/FishCollection/"
+                          "h5/index.html?lang_type=en", safe="")),
+        ("eas_refer", quote("https://www.playdeltaforce.com/events/hq/en/",
+                            safe="")),
+        ("os", "3"), ("channelid", str(c["channel"])),
+        ("openid", openid), ("token", token), ("gameid", str(c["game_id"])),
+        ("sPlatId", "1"), ("iUin", openid), ("sArea", FISHING_AREA),
+    ]
+    headers = {
+        "content-type": "application/x-www-form-urlencoded",
+        "origin": "https://www.playdeltaforce.com",
+        "referer": "https://www.playdeltaforce.com/",
+        "user-agent": HEADERS["user-agent"],
+    }
+    dbg(f"POST {FISHING_URL}")
+    try:
+        resp = requests.post(FISHING_URL, data=fields, headers=headers,
+                             timeout=(10, 20))
+    except requests.exceptions.ConnectTimeout:
+        raise RuntimeError("Connection timed out reaching the fishing service.")
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Could not reach the fishing service: {e}")
+    dbg(f"HTTP {resp.status_code}")
+    resp.raise_for_status()
+    try:
+        payload = resp.json()
+    except ValueError:
+        raise RuntimeError("The fishing service sent back something that "
+                           "wasn't JSON.")
+    inner = (payload.get("jData") or {}).get("data")
+    ok = (str(payload.get("ret")) == "0" and isinstance(inner, dict)
+          and str(inner.get("result", "0")) == "0")
+    if not ok:
+        raise RuntimeError(
+            "The fishing service refused the request "
+            f"(code {payload.get('ret')}: {payload.get('sMsg')}). Your login "
+            "may have expired - log in again from the right side.")
+    return inner
+
+
 def fetch_match_detail(room_id: str, on_debug=None) -> dict:
     refresh_credentials_from_browser()
     require_credentials("matchdetail")
@@ -1371,6 +1474,441 @@ def pull_weekly_report(on_progress=None, on_debug=None) -> dict:
 
     prog("Weekly report updated.")
     return data
+
+
+# Door codes are only valid for a short time, so unlike everything else
+# they are never written to the cache file: a stale code that looks
+# current is worse than showing nothing.
+DOOR_MAP_ORDER = ("zero_dam", "longbow_valley", "bakshe", "spaceport",
+                  "tide_prison", "az3")
+DOOR_MAP_NAMES = {
+    "zero_dam": "Zero Dam",
+    "longbow_valley": "Longbow Valley",
+    "bakshe": "Brakkesh",
+    "spaceport": "Space City",
+    "tide_prison": "Tide Prison",
+    "az3": "AZ3",
+}
+
+
+def door_codes_list(data: dict) -> list:
+    """[{key, name, code}] in a stable, friendly order. Unknown map keys
+    the API adds later are kept (title-cased) rather than dropped."""
+    data = data if isinstance(data, dict) else {}
+    keys = [k for k in DOOR_MAP_ORDER if k in data]
+    keys += sorted(k for k in data if k not in DOOR_MAP_ORDER)
+    out = []
+    for k in keys:
+        code = data.get(k)
+        if code is None or str(code).strip() == "":
+            continue
+        code = str(code).strip()
+        if code.isdigit() and len(code) < 4:
+            code = code.zfill(4)      # a number sneaking through loses its 0
+        out.append({"key": k,
+                    "name": DOOR_MAP_NAMES.get(k) or k.replace("_", " ").title(),
+                    "code": code})
+    return out
+
+
+def pull_door_codes(on_progress=None, on_debug=None) -> list:
+    if on_progress:
+        on_progress("Fetching door codes...")
+    items = door_codes_list(fetch_door_codes(on_debug=on_debug))
+    if not items:
+        raise RuntimeError("The server returned no door codes right now.")
+    return items
+
+
+def _to_int(v, default=0) -> int:
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def pull_reds(on_progress=None, on_debug=None) -> dict:
+    if on_progress:
+        on_progress("Fetching your collected reds...")
+    data = fetch_dahong(on_debug=on_debug)
+    with _cache_lock:
+        cache = load_cache()
+        cache["dahong"] = data
+        cache["dahong_updated_at"] = datetime.now().isoformat()
+        save_cache(cache)
+    if on_progress:
+        on_progress("Collected reds updated.")
+    return data
+
+
+def reds_collection(cache: dict = None) -> dict:
+    """Display-ready version of GetDahongPoster:
+        {"total_count", "total_value", "type_count",
+         "items": [{item_id, name, grade, image_url, count, total_value,
+                    unit_value}, ...]}   sorted by total_value, high first.
+    Never raises: nothing fetched yet gives an empty collection. Totals
+    come from the API's own overview when present, otherwise from the
+    list, so a missing overview can't blank the page."""
+    cache = cache if cache is not None else load_cache()
+    data = cache.get("dahong") or {}
+    raw = data.get("high_value_collection_list") or []
+    ov = data.get("overview") or {}
+
+    items = []
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        item_id = str(it.get("item_id", "")).strip()
+        if not item_id:
+            continue
+        count = max(0, _to_int(it.get("item_count")))
+        # item_value is the price of ONE copy (the player confirmed: 8
+        # Hearts of Africa are 13M each, not 13M together), so the stack
+        # is unit * count.
+        unit = _to_int(it.get("item_value"))
+        total = unit * count
+        info = describe_item(item_id)
+        items.append({
+            "item_id": item_id,
+            "name": info["name"],
+            "grade": info["grade"],
+            "image_url": info["image_url"],
+            "count": count,
+            "total_value": total,
+            "unit_value": unit,
+        })
+    items.sort(key=lambda x: (x["total_value"], x["count"]), reverse=True)
+
+    return {
+        "total_count": _to_int(ov.get("dahong_total_count"),
+                               sum(i["count"] for i in items)),
+        "total_value": _to_int(ov.get("dahong_total_value"),
+                               sum(i["total_value"] for i in items)),
+        "type_count": _to_int(ov.get("dahong_type_count"), len(items)),
+        "items": items,
+    }
+
+
+# ---------------------------------------------------------------------
+# Fishing
+# ---------------------------------------------------------------------
+def _parse_js_data(text: str):
+    """The game site's data files are `var basic_info_xxx = <JSON>;` -
+    strip the wrapper and read the value (an object or an array). Tries
+    strict JSON first, then repairs for unquoted keys and \\' escapes in
+    case a file is a JavaScript literal rather than JSON."""
+    import re
+    eq = text.find("=")
+    if eq < 0:
+        raise ValueError("no assignment found in the data file")
+    body = text[eq + 1:].strip().rstrip(";").strip()
+    if not body or body[0] not in "[{":
+        raise ValueError("no object or list found in the data file")
+    try:
+        return json.loads(body)
+    except ValueError:
+        fixed = body.replace("\\'", "'")
+        fixed = re.sub(r'([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:', r'\1"\2":', fixed)
+        return json.loads(fixed)
+
+
+_parse_fish_js = _parse_js_data     # old name, kept for the tests
+
+
+FISH_CATALOG_VERSION = 3      # bump when the catalog keeps new fields
+
+
+def _as_list(v) -> list:
+    return [str(x) for x in v] if isinstance(v, (list, tuple)) else []
+
+
+def _build_fish_catalog(raw: dict) -> dict:
+    waters_raw = raw.get("water_areas_namemap")
+    waters = ({str(k): str(v) for k, v in waters_raw.items()}
+              if isinstance(waters_raw, dict) else {})
+    by_unique, species = {}, {}
+    for f in raw.get("fishes") or []:
+        if not isinstance(f, dict):
+            continue
+        uid = str(f.get("unique_id", "")).strip()
+        fid = str(f.get("fish_id", "")).strip()
+        name = f.get("name")
+        name = name.get("en") if isinstance(name, dict) else name
+        if not uid or not name:
+            continue
+        entry = {"fish_id": fid, "name": str(name),
+                 "grade": str(f.get("grade", "") or ""),
+                 "image_url": str(f.get("image_url", "") or ""),
+                 "size_category": str(f.get("size_category", "") or ""),
+                 "water_category": str(f.get("water_category", "") or ""),
+                 "water_ids": _as_list(f.get("water_ids")),
+                 "bait_ids": _as_list(f.get("bait_ids"))}
+        by_unique[uid] = entry
+        if fid:
+            sp = species.setdefault(fid, {"name": entry["name"],
+                                          "image_url": entry["image_url"],
+                                          "size_category": entry["size_category"],
+                                          "water_category": entry["water_category"],
+                                          "water_ids": entry["water_ids"],
+                                          "bait_ids": entry["bait_ids"]})
+            if not sp["image_url"] and entry["image_url"]:
+                sp["image_url"] = entry["image_url"]
+    return {"v": FISH_CATALOG_VERSION, "waters": waters,
+            "by_unique": by_unique, "species": species,
+            "baits": {}, "ecology": {}}
+
+
+def _clean_game_text(s) -> str:
+    """The game's text files use a backtick where an apostrophe belongs."""
+    return str(s or "").replace("`", "'").strip()
+
+
+def _build_bait_catalog(rows) -> dict:
+    """fishing_baits_en.js: [{bait_id, name:{en}, quality, image_url}]"""
+    out = {}
+    for b in rows if isinstance(rows, list) else []:
+        if not isinstance(b, dict) or not b.get("bait_id"):
+            continue
+        name = b.get("name")
+        name = name.get("en") if isinstance(name, dict) else name
+        out[str(b["bait_id"])] = {"name": _clean_game_text(name) or f"Bait {b['bait_id']}",
+                                  "image_url": str(b.get("image_url", "") or "")}
+    return out
+
+
+def _build_ecology_catalog(rows) -> dict:
+    """fishing_ecology_en.js: [{ecology_id: "500101_Ecological_TitleText",
+    text:{en}}]. A record id like 500101 belongs to the fish with that id
+    minus the last two digits (5001); the pieces are UnlockText (the
+    hint shown while locked), TitleText and DetailText. Tag entries
+    ("..._Tag_...") are earned titles, not fish text, and are skipped.
+    Returns {fish_id: [{"id", "index", "title", "unlock", "detail"}, ...]}."""
+    import re
+    recs = {}
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        m = re.match(r"^(\d+)_Ecological_(\w+)$", str(r.get("ecology_id", "")))
+        if not m or len(m.group(1)) < 3:
+            continue
+        rid, kind = m.group(1), m.group(2)
+        text = r.get("text")
+        text = text.get("en") if isinstance(text, dict) else text
+        rec = recs.setdefault(rid, {"id": rid, "index": rid[-2:],
+                                    "title": "", "unlock": "", "detail": ""})
+        if kind == "TitleText":
+            rec["title"] = _clean_game_text(text)
+        elif kind == "UnlockText":
+            rec["unlock"] = _clean_game_text(text)
+        elif kind == "DetailText":
+            rec["detail"] = _clean_game_text(text)
+    by_fish = {}
+    for rid, rec in recs.items():
+        by_fish.setdefault(rid[:-2], []).append(rec)
+    for lst in by_fish.values():
+        lst.sort(key=lambda x: x["index"])
+    return by_fish
+
+
+_fish_catalog_mem = None
+
+
+def load_fish_catalog(force: bool = False, allow_download: bool = True) -> dict:
+    """Fish names/grades/pictures/ecology/baits from the game site's own
+    data files, kept on disk for a week. Never raises: with no file and no
+    network it returns an empty catalog and the page shows "Fish #5001"
+    instead of a name.
+
+    Only a catalog that is current (right version, complete, fresh) is
+    remembered in memory. An old or half-downloaded one is returned for
+    display but never remembered, so the next call that is allowed to
+    download still does - remembering it would pin the stale copy for the
+    whole session."""
+    global _fish_catalog_mem
+    if _fish_catalog_mem is not None and not force:
+        return _fish_catalog_mem
+    empty = {"v": FISH_CATALOG_VERSION, "waters": {}, "baits": {},
+             "ecology": {}, "by_unique": {}, "species": {}}
+
+    cached, fresh = None, False
+    try:
+        cached = json.loads(FISH_CATALOG_FILE.read_text(encoding="utf-8"))
+        fresh = (time.time() - FISH_CATALOG_FILE.stat().st_mtime
+                 < FISH_CATALOG_MAX_AGE)
+    except (OSError, ValueError):
+        cached = None
+    current = bool(cached and cached.get("by_unique")
+                   and cached.get("v") == FISH_CATALOG_VERSION
+                   and not cached.get("partial"))
+    if current and fresh and not force:
+        _fish_catalog_mem = cached
+        return cached
+
+    if allow_download:
+        try:
+            resp = requests.get(FISH_CATALOG_URL, timeout=(10, 20),
+                                headers={"user-agent": HEADERS["user-agent"]})
+            resp.raise_for_status()
+            cat = _build_fish_catalog(_parse_js_data(resp.text))
+            partial = False
+            for key, url, build in (("baits", FISH_BAITS_URL, _build_bait_catalog),
+                                    ("ecology", FISH_ECOLOGY_URL, _build_ecology_catalog)):
+                try:
+                    r2 = requests.get(url, timeout=(10, 20),
+                                      headers={"user-agent": HEADERS["user-agent"]})
+                    r2.raise_for_status()
+                    cat[key] = build(_parse_js_data(r2.text))
+                    if not cat[key]:
+                        partial = True      # parsed, but nothing in it
+                except Exception as e:
+                    if _debug:
+                        print(f"[core] fish {key} download failed: {e}")
+                    cat[key] = (cached or {}).get(key) or {}
+                    if not cat[key]:
+                        partial = True
+            if cat["by_unique"]:
+                if partial:
+                    cat["partial"] = True   # retry the missing files next time
+                try:
+                    FISH_CATALOG_FILE.write_text(json.dumps(cat),
+                                                 encoding="utf-8")
+                except OSError:
+                    pass
+                if not partial:
+                    _fish_catalog_mem = cat
+                return cat
+        except Exception as e:
+            if _debug:
+                print(f"[core] fish catalog download failed: {e}")
+    if cached and cached.get("by_unique"):
+        return cached                   # stale beats nothing - but not remembered
+    return empty
+
+
+def fish_catalog_is_current() -> bool:
+    """True when the fish data on hand is complete, the right version and
+    under a week old - i.e. nothing needs downloading."""
+    if _fish_catalog_mem is not None:
+        return True
+    try:
+        cached = json.loads(FISH_CATALOG_FILE.read_text(encoding="utf-8"))
+        fresh = (time.time() - FISH_CATALOG_FILE.stat().st_mtime
+                 < FISH_CATALOG_MAX_AGE)
+    except (OSError, ValueError):
+        return False
+    return bool(fresh and cached.get("by_unique")
+                and cached.get("v") == FISH_CATALOG_VERSION
+                and not cached.get("partial"))
+
+
+def pull_fishing(on_progress=None, on_debug=None) -> dict:
+    if on_progress:
+        on_progress("Fetching your fishing collection...")
+    load_fish_catalog()                 # names + pictures (cached)
+    data = fetch_fishing(on_debug=on_debug)
+    with _cache_lock:
+        cache = load_cache()
+        cache["fishing"] = data
+        cache["fishing_updated_at"] = datetime.now().isoformat()
+        save_cache(cache)
+    if on_progress:
+        on_progress("Fishing collection updated.")
+    return data
+
+
+def _to_float(v, default=0.0) -> float:
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_fishing(data: dict, catalog: dict = None) -> dict:
+    """Display-ready fishing collection. Never raises (empty in, empty
+    out).
+
+    entries_list is "<count>|<fish>|<fish>|..." and each fish is 16
+    space-separated fields:
+      0 fish_id   1 times caught   2 first caught (unix time)
+      3 longest cm   4 when   5 shortest cm   6 when
+      7 heaviest kg  8 when   9 lightest kg   10 when
+      11 zones   12/13 more id lists (not shown)
+      14 unique_id (the best form caught; joins to the fish catalog)
+      15 grade
+    The per-fish catch counts add up to success_count exactly."""
+    data = data or {}
+    catalog = catalog if catalog is not None else load_fish_catalog(
+        allow_download=False)
+    by_unique = catalog.get("by_unique", {})
+    species = catalog.get("species", {})
+    waters = catalog.get("waters", {}) or {}
+    ecology = catalog.get("ecology", {}) or {}      # fish_id -> records
+    baits = catalog.get("baits", {}) or {}          # bait_id -> {name, image_url}
+
+    parts = str(data.get("entries_list", "")).split("|")
+    fish = []
+    for chunk in parts[1:]:
+        f = chunk.strip().split(" ")
+        if len(f) < 16:
+            continue
+        fid, uid = f[0], f[14]
+        info = by_unique.get(uid) or {}
+        sp = species.get(fid) or {}
+        water_ids = info.get("water_ids") or sp.get("water_ids") or []
+        from urllib.parse import unquote
+        unlocked = {x for x in unquote(f[12]).split(",") if x}
+        blocks = []
+        for rec in ecology.get(fid, []):
+            ok = rec["id"] in unlocked
+            text = rec["detail"] if ok else (rec["unlock"] or rec["detail"])
+            if rec["title"] or text:
+                blocks.append({"title": rec["title"], "text": text, "locked": not ok})
+        bait_ids = info.get("bait_ids") or sp.get("bait_ids") or []
+        bait_list = [{"id": b, "name": baits[b]["name"],
+                      "image_url": baits[b]["image_url"]}
+                     for b in dict.fromkeys(bait_ids) if b in baits]
+        fish.append({
+            "water_names": [waters.get(w, f"Area {w}") for w in water_ids],
+            "water_category": info.get("water_category") or sp.get("water_category") or "",
+            "size_category": info.get("size_category") or sp.get("size_category") or "",
+            "bait_ids": bait_ids, "baits": bait_list,
+            "ecology": blocks,
+            "max_length_at": _to_int(f[4]), "min_length_at": _to_int(f[6]),
+            "max_weight_at": _to_int(f[8]), "min_weight_at": _to_int(f[10]),
+            "fish_id": fid, "unique_id": uid,
+            "name": info.get("name") or sp.get("name") or f"Fish #{fid}",
+            "grade": _to_int(f[15]),
+            "image_url": info.get("image_url") or sp.get("image_url") or "",
+            "count": _to_int(f[1]),
+            "first_caught": _to_int(f[2]),
+            "max_length": _to_float(f[3]), "min_length": _to_float(f[5]),
+            "max_weight": _to_float(f[7]), "min_weight": _to_float(f[9]),
+        })
+    fish.sort(key=lambda x: x["count"], reverse=True)
+
+    catches = _to_int(data.get("success_count"), sum(x["count"] for x in fish))
+    misses = _to_int(data.get("no_catch_count"))
+    by_id = {x["fish_id"]: x for x in fish}
+    rare = next((x for x in fish
+                 if x["unique_id"] == str(data.get("rarest_fish_item_id", ""))),
+                None)
+    top = by_id.get(str(data.get("most_caught_fish_id", "")))
+    return {
+        "has_data": bool(fish),
+        "level": _to_int(data.get("fish_level")),
+        "catches": catches,
+        "misses": misses,
+        "catch_rate": (100.0 * catches / (catches + misses)
+                       if catches + misses else 0.0),
+        "days": _to_int(data.get("days")),
+        "best_streak": _to_int(data.get("max_consecutive_successes")),
+        "best_value": _to_int(data.get("max_catch_value")),
+        "species_caught": len(fish),
+        "species_total": (len(species) if len(species) >= len(fish) else None),
+        "rarest": rare, "most_caught": top,
+        "longest_fight_s": _to_int(data.get("longest_struggle_time")) / 1000.0,
+        "fish": fish,
+    }
 
 
 def format_relative_time(iso_str: str) -> str:
