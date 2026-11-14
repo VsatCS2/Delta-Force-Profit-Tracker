@@ -3,386 +3,110 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-
-<!-- ===== EDIT THESE THREE THINGS =====
-  1. SITE URL:      https://deltaforcetracker.com/   (change if you use a custom domain)
-  2. DOWNLOAD URL:  https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest
-  3. VERSION:       2.0.1
-  4. MEDIA:         docs/media/ holds the tour video and screenshots (rebuild the video with make_tour.py)
-  (search for those strings; they appear a few times each)
--->
-
 <title>Delta Force Profit Tracker: track credits per match, map and operator</title>
-<meta name="description" content="DF Tracker for Delta Force: track profit by match, map and operator, use hotkey overlays for your profit and player lookups, and get price alerts.">
+<meta name="description" content="DF Tracker for Delta Force: track profit by match, map and operator, use hotkey overlays for your profit and player lookups, set price alerts, and see door codes, reds and fishing. Free for Windows.">
 <link rel="canonical" href="https://deltaforcetracker.com/">
-
 <meta property="og:type" content="website">
-<meta property="og:title" content="Delta Force Profit Tracker">
-<meta property="og:description" content="Track what every Delta Force match actually pays. Profit by map and operator, in-game overlays, player lookup, and price alerts.">
+<meta property="og:site_name" content="DF Tracker">
+<meta property="og:title" content="Delta Force Profit Tracker: track credits per match, map and operator">
+<meta property="og:description" content="DF Tracker for Delta Force: track profit by match, map and operator, use hotkey overlays for your profit and player lookups, set price alerts, and see door codes, reds and fishing. Free for Windows.">
 <meta property="og:url" content="https://deltaforcetracker.com/">
 <meta property="og:image" content="https://deltaforcetracker.com/media/og-image.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The DF Tracker overview screen showing profit for today, this week, this month and all time">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="https://deltaforcetracker.com/media/og-image.jpg">
 <meta name="theme-color" content="#0d1829">
-
 <link rel="icon" href="/favicon.ico" sizes="48x48">
 <link rel="icon" type="image/png" href="/favicon-96.png" sizes="96x96">
 <link rel="icon" type="image/png" href="/favicon-192.png" sizes="192x192">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-
+<link rel="stylesheet" href="/assets/site.css?v=2026-11-13">
 <script type="application/ld+json">
 {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Delta Force Profit Tracker",
-  "alternateName": "DF Tracker",
-  "applicationCategory": "GameApplication",
-  "operatingSystem": "Windows 10, Windows 11",
-  "softwareVersion": "2.0.1",
-  "description": "A Windows app for Delta Force that tracks profit per match, map and operator, shows your profit and looks up players with in-game hotkey overlays, and alerts you when an item drops to the price you want to pay.",
-  "downloadUrl": "https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest",
-  "url": "https://deltaforcetracker.com/",
-  "featureList": [
-    "Profit per match with today, week, month and all-time totals",
-    "Play sessions with a copyable summary",
-    "Weekly highlights and a 7-day trend",
-    "Profit breakdown by map and by operator",
-    "Match history with squad breakdowns",
-    "Profit overlay opened with a hotkey",
-    "Player search overlay with K/D by difficulty and current rank",
-    "Player lookup by name",
-    "Price alerts that notify you when an item drops to the price you want to pay",
-    "Optional community leaderboard",
-    "Automatic updates, system tray, and color themes"
-  ],
-  "screenshot": [
-    "https://deltaforcetracker.com/media/overview-full.webp",
-    "https://deltaforcetracker.com/media/profile-full.webp",
-    "https://deltaforcetracker.com/media/maps-full.webp",
-    "https://deltaforcetracker.com/media/operators-full.webp",
-    "https://deltaforcetracker.com/media/matches-full.webp",
-    "https://deltaforcetracker.com/media/community-full.webp",
-    "https://deltaforcetracker.com/media/player-lookup-full.webp",
-    "https://deltaforcetracker.com/media/price-alerts-full.webp"
-  ]
+ "@context": "https://schema.org",
+ "@type": "SoftwareApplication",
+ "name": "Delta Force Profit Tracker",
+ "alternateName": "DF Tracker",
+ "applicationCategory": "GameApplication",
+ "operatingSystem": "Windows 10, Windows 11",
+ "softwareVersion": "2.1.0",
+ "description": "A free Windows app for Delta Force that tracks profit per match, map and operator, shows your profit and looks up players with in-game hotkey overlays, alerts you when an item drops to your price, and adds door codes, a reds collection and a fishing tracker.",
+ "downloadUrl": "https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest",
+ "url": "https://deltaforcetracker.com/",
+ "offers": {
+  "@type": "Offer",
+  "price": "0",
+  "priceCurrency": "USD"
+ },
+ "featureList": [
+  "Profit per match with today, week, month and all-time totals",
+  "Profit breakdown by map and by operator",
+  "Match history with squad breakdowns",
+  "Profit overlay opened with a hotkey",
+  "Player search overlay and player lookup",
+  "Price alerts for auction items",
+  "Door codes for every map",
+  "Reds collection with values",
+  "Fishing collection tracker",
+  "Optional community leaderboard"
+ ],
+ "screenshot": [
+  "https://deltaforcetracker.com/media/overview-full.webp",
+  "https://deltaforcetracker.com/media/profile-full.webp",
+  "https://deltaforcetracker.com/media/maps-full.webp",
+  "https://deltaforcetracker.com/media/operators-full.webp",
+  "https://deltaforcetracker.com/media/matches-full.webp",
+  "https://deltaforcetracker.com/media/community-full.webp",
+  "https://deltaforcetracker.com/media/player-lookup-full.webp",
+  "https://deltaforcetracker.com/media/price-alerts-full.webp"
+ ]
 }
 </script>
 <script type="application/ld+json">
 {
-  "@context": "https://schema.org",
-  "@type": "VideoObject",
-  "name": "DF Tracker 2.0 tour",
-  "description": "A 38-second tour of DF Tracker, the Delta Force profit tracker: overview, profile, maps, operators, match history, community leaderboard, player lookup and price alerts.",
-  "thumbnailUrl": "https://deltaforcetracker.com/media/tour-poster.jpg",
-  "contentUrl": "https://deltaforcetracker.com/media/tour.mp4",
-  "uploadDate": "2026-10-21",
-  "duration": "PT38S"
+ "@context": "https://schema.org",
+ "@type": "WebSite",
+ "name": "DF Tracker",
+ "url": "https://deltaforcetracker.com/"
 }
 </script>
 <script type="application/ld+json">
 {
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
-    {
-      "@type": "Question",
-      "name": "Does DF Tracker touch the game?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "No. It runs as a separate app. It doesn't read the game's memory, inject code, or automate anything in the game, and the overlays are their own windows. Your own match data comes from the official Delta Force stats service. Player lookups and item prices come from separate third-party data sources."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "Do I need to sign in?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "There are two separate sign-ins, and only the first is needed to track your own matches. Your game account: sign in with your Delta Force (Level Infinite) account so DF Tracker can pull your matches. Your password goes only to Level Infinite's login, never to DF Tracker's servers. A DF Tracker account (optional): sign in with Discord to use player lookup and the player search overlay."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "What is a DF Tracker account?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "It's a free account you create by signing in with Discord. It lets our server know who is looking up players, so lookups can be limited fairly per person. It is separate from your game account, and DF Tracker only uses Discord to confirm who you are."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "What do you store about me?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "For a DF Tracker account: your Discord ID, email address, display name and avatar link as Discord provides them, your plan, how many lookups you've used each day, and when you last used the app. If you join the community leaderboard: your Overview totals and recent matches under your in-game nickname. Your own match history stays on your PC. The privacy page has the full details."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "How do the overlays work?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "Both overlays are off until you turn them on in Settings. The profit overlay opens with Ctrl+Shift+D and the player search overlay with Ctrl+Shift+O, and you can change either hotkey. The search overlay needs your DF Tracker account. Like any pop-up window, the overlays can't show over exclusive fullscreen, so play in windowed or borderless mode."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "Are price alerts for buying or selling?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "Buying. You pick an item and the price you'd like to pay, and DF Tracker notifies you when the item's auction price drops to that price or lower."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "Can I delete my account and data?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "Yes. Contact us from the privacy page and we'll delete your DF Tracker account and the data attached to it. Leaving the community leaderboard also removes your stats from it."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "Which versions of Windows are supported?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "Windows 10 and Windows 11."
-      }
-    },
-    {
-      "@type": "Question",
-      "name": "Is DF Tracker official?",
-      "acceptedAnswer": {
-        "@type": "Answer",
-        "text": "No. It's an independent fan-made tool and isn't affiliated with Level Infinite, Proxima Beta, or the Delta Force developers."
-      }
-    }
-  ]
+ "@context": "https://schema.org",
+ "@type": "VideoObject",
+ "name": "DF Tracker tour",
+ "description": "A 38-second tour of DF Tracker, the Delta Force profit tracker: overview, profile, maps, operators, match history, community leaderboard, player lookup and price alerts.",
+ "thumbnailUrl": "https://deltaforcetracker.com/media/tour-poster.jpg",
+ "contentUrl": "https://deltaforcetracker.com/media/tour.mp4",
+ "uploadDate": "2026-10-21",
+ "duration": "PT38S"
 }
 </script>
-
-<style>
-  :root {
-    --bg: #0d1829;
-    --panel: #142238;
-    --panel-2: #192b45;
-    --line: #25384f;
-    --ink: #e9eef6;
-    --muted: #97a9c0;
-    --credit: #f0b84a;      /* credits / the one call to action */
-    --profit: #58d08e;      /* positive numbers only */
-    --display: "Big Shoulders Display", Impact, "Arial Narrow", sans-serif;
-    --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 400 1.0625rem/1.6 var(--body);
-    -webkit-font-smoothing: antialiased;
-  }
-  a { color: inherit; }
-  :focus-visible { outline: 3px solid var(--credit); outline-offset: 3px; border-radius: 4px; }
-  .wrap { width: min(1120px, 100% - 48px); margin-inline: auto; }
-
-  /* ---------- header ---------- */
-  .site-head { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
-  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none;
-           font: 800 1.5rem/1 var(--display); letter-spacing: .02em; }
-  .brand svg { width: 28px; height: 28px; flex: none; }
-  .brand span { color: var(--muted); font-weight: 700; }
-
-  /* ---------- buttons ---------- */
-  .btn { display: inline-flex; align-items: center; gap: 10px; text-decoration: none;
-         font: 600 1rem/1 var(--body); padding: 14px 22px; border-radius: 8px;
-         border: 1px solid transparent; cursor: pointer; }
-  .btn-primary { background: var(--credit); color: #1a1405; }
-  .btn-primary:hover { background: #f6c764; }
-  .btn-quiet { border-color: var(--line); color: var(--ink); padding: 11px 18px; font-size: .95rem; }
-  .btn-quiet:hover { border-color: var(--muted); }
-  .btn-lg { padding: 18px 28px; font-size: 1.125rem; }
-
-  /* ---------- hero ---------- */
-  .hero { display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px; align-items: center;
-          padding: 56px 0 88px; }
-  h1 { font: 900 clamp(2.9rem, 6.2vw, 5.1rem)/.94 var(--display); letter-spacing: .005em;
-       margin: 0 0 24px; text-wrap: balance; }
-  .lead { color: var(--muted); font-size: 1.15rem; max-width: 34em; margin: 0 0 32px; }
-  .cta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; }
-  .meta { color: var(--muted); font-size: .95rem; }
-
-  /* the ledger: the one memorable element */
-  .ledger { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-            padding: 26px 28px 22px; position: relative;
-            box-shadow: 0 30px 60px -30px rgba(0,0,0,.6); }
-  .ledger-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; }
-  .ledger-head h2 { font: 800 1.5rem/1 var(--display); margin: 0; letter-spacing: .02em; }
-  .ledger-head small { color: var(--muted); font-size: .85rem; }
-  .row { display: flex; align-items: baseline; gap: 10px; padding: 9px 0; }
-  .row .k { color: var(--muted); }
-  .row .rule { flex: 1; border-bottom: 2px dotted var(--line); transform: translateY(-4px); min-width: 24px; }
-  .row .v { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
-  .v.up { color: var(--profit); }
-  .row.big { padding-top: 18px; margin-top: 8px; border-top: 1px solid var(--line); }
-  .row.big .k { color: var(--ink); font-weight: 600; }
-  .row.big .v { font: 800 2.1rem/1 var(--display); color: var(--credit); letter-spacing: .01em; }
-  .ledger-foot { margin: 14px 0 0; color: var(--muted); font-size: .8rem; }
-
-  /* ---------- sections ---------- */
-  section { padding: 84px 0; border-top: 1px solid var(--line); }
-  h2.section-title { font: 800 clamp(2rem, 4vw, 3rem)/1 var(--display); margin: 0 0 14px; letter-spacing: .01em; }
-  .section-lead { color: var(--muted); max-width: 36em; margin: 0 0 44px; }
-
-  .features { list-style: none; margin: 0; padding: 0; }
-  .features li { display: grid; grid-template-columns: minmax(200px, 300px) 1fr; gap: 12px 48px;
-                 padding: 24px 0; border-top: 1px solid var(--line); align-items: baseline; }
-  .features li:last-child { border-bottom: 1px solid var(--line); }
-  .features h3 { font: 800 1.7rem/1.05 var(--display); margin: 0; letter-spacing: .01em; }
-  .features p { margin: 0; color: var(--muted); max-width: 40em; }
-  .features p b { color: var(--ink); font-weight: 500; }
-
-  /* lookup */
-  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
-  .split p { color: var(--muted); max-width: 32em; }
-  .lookup { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px 26px; }
-  .search { display: flex; gap: 10px; margin-bottom: 20px; }
-  .search div { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-                padding: 12px 14px; color: var(--muted); }
-  .search span { background: var(--profit); color: #07210f; font-weight: 600; border-radius: 8px; padding: 12px 18px; }
-  .lookup h3 { font: 800 1.9rem/1 var(--display); margin: 0 0 4px; }
-  .lookup .lv { color: var(--muted); font-size: .9rem; margin-bottom: 14px; }
-
-  /* overlay + alert mock-ups */
-  .mocks { display: grid; gap: 22px; }
-  .mock { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
-  .mock-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
-  .mock-head b { font: 800 1.15rem/1 var(--display); letter-spacing: .02em; }
-  .mock-head small { color: var(--muted); font-size: .8rem; }
-  .mock .big { font: 800 2.3rem/1 var(--display); color: var(--profit); margin: 2px 0 12px; letter-spacing: .01em; }
-  .mock .sub { color: var(--muted); font-size: .85rem; margin-bottom: 2px; }
-  .mock .kv { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-variant-numeric: tabular-nums; }
-  .mock .kv span:first-child { color: var(--muted); }
-  .mock .kv .up { color: var(--profit); }
-  .mock .kv .down { color: #ff7b72; }
-  .mock hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
-  .stats3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; margin: 12px 0; }
-  .stats3 div span { display: block; color: var(--muted); font-size: .72rem; font-weight: 600; }
-  .stats3 div b { font-weight: 600; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
-  .stats3 div small { display: block; color: var(--muted); font-size: .72rem; }
-  .toast { border-left: 4px solid var(--credit); }
-  .toast p { margin: 0; color: var(--ink); max-width: none; }
-  .toast .t-sub { color: var(--muted); font-size: .85rem; margin-top: 6px; }
-  .also { list-style: none; margin: 0; padding: 0; columns: 2; column-gap: 48px; }
-  .also li { break-inside: avoid; padding: 11px 0; border-top: 1px solid var(--line); color: var(--muted); }
-  .also li b { color: var(--ink); font-weight: 500; }
-  .sublead { color: var(--muted); margin: 0 0 18px; max-width: 40em; }
-  .split p b { color: var(--ink); font-weight: 500; }
-  .split p { margin: 0 0 14px; }
-  section.tight { padding-top: 64px; }
-
-  /* steps: this one really is a sequence */
-  .steps { list-style: none; counter-reset: s; margin: 0 0 40px; padding: 0; display: grid;
-           grid-template-columns: repeat(3, 1fr); gap: 28px; }
-  .steps li { counter-increment: s; padding-top: 16px; border-top: 3px solid var(--credit); }
-  .steps li::before { content: counter(s); font: 900 2.4rem/1 var(--display); color: var(--credit); display: block; margin-bottom: 8px; }
-  .steps b { display: block; font-weight: 600; margin-bottom: 4px; }
-  .steps span { color: var(--muted); }
-
-  /* faq */
-  .faq details { border-top: 1px solid var(--line); padding: 4px 0; }
-  .faq details:last-child { border-bottom: 1px solid var(--line); }
-  .faq summary { cursor: pointer; font-weight: 600; padding: 18px 0; list-style: none; display: flex;
-                 justify-content: space-between; gap: 20px; }
-  .faq summary::-webkit-details-marker { display: none; }
-  .faq summary::after { content: "+"; color: var(--credit); font-size: 1.4rem; line-height: 1; }
-  .faq details[open] summary::after { content: "\2212"; }
-  .faq details p { margin: 0 0 20px; color: var(--muted); max-width: 44em; }
-
-  footer { border-top: 1px solid var(--line); padding: 40px 0 56px; color: var(--muted); font-size: .9rem; }
-  footer p { max-width: 52em; margin: 0 0 10px; }
-
-  /* ---------- the single load moment: ledger lines settle in once ---------- */
-  .ledger .row { animation: settle .55s ease-out both; }
-  .ledger .row:nth-of-type(1) { animation-delay: .15s; }
-  .ledger .row:nth-of-type(2) { animation-delay: .30s; }
-  .ledger .row:nth-of-type(3) { animation-delay: .45s; }
-  .ledger .row:nth-of-type(4) { animation-delay: .60s; }
-  .ledger .row:nth-of-type(5) { animation-delay: .75s; }
-  .ledger .row:nth-of-type(6) { animation-delay: .90s; }
-  @keyframes settle { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-  @media (prefers-reduced-motion: reduce) {
-    .ledger .row { animation: none; }
-    html { scroll-behavior: auto; }
-  }
-
-  /* ---------- see it in action ---------- */
-  .tour { margin: 0 0 44px; }
-  .tour video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; background: #0a1220;
-                border: 1px solid var(--line); border-radius: 14px; }
-  .tour figcaption { color: var(--muted); font-size: .85rem; margin-top: 12px; }
-  .shots { list-style: none; margin: 0; padding: 0; display: grid; gap: 20px;
-           grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
-  .shot { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
-          text-decoration: none; color: var(--ink); transition: border-color .15s, transform .15s; }
-  .shot:hover { border-color: var(--muted); transform: translateY(-2px); }
-  .shot img { display: block; width: 100%; height: auto; aspect-ratio: 8 / 5; }
-  .shot span { display: block; padding: 12px 16px 14px; font-weight: 600; font-size: .95rem; border-top: 1px solid var(--line); }
-  dialog#lightbox { border: 0; padding: 0; background: transparent; color: var(--ink); max-width: min(96vw, 1600px); max-height: 94vh; overflow: visible; }
-  dialog#lightbox::backdrop { background: rgba(5, 10, 18, .88); }
-  dialog#lightbox img { display: block; max-width: 100%; max-height: 86vh; margin: 0 auto; border-radius: 10px; border: 1px solid var(--line); cursor: zoom-out; }
-  dialog#lightbox form { text-align: center; margin-top: 14px; }
-  dialog#lightbox button { font: inherit; font-weight: 600; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line);
-                           border-radius: 999px; padding: 9px 22px; cursor: pointer; }
-  dialog#lightbox button:hover { border-color: var(--muted); }
-  @media (prefers-reduced-motion: reduce) { .shot { transition: none; } .shot:hover { transform: none; } }
-
-  /* ---------- responsive ---------- */
-  @media (max-width: 900px) {
-    .hero, .split { grid-template-columns: 1fr; gap: 40px; }
-    .hero { padding-top: 24px; }
-    .features li { grid-template-columns: 1fr; gap: 6px; }
-    .steps { grid-template-columns: 1fr; }
-    .also { columns: 1; }
-    section { padding: 64px 0; }
-  }
-  @media (max-width: 480px) {
-    .wrap { width: calc(100% - 32px); }
-    .site-head .btn-quiet { display: none; }
-    .brand span { display: none; }
-    .ledger { padding: 20px; }
-  }
-</style>
 </head>
-
 <body>
 <div class="wrap">
   <header class="site-head">
-    <a class="brand" href="#top" aria-label="Delta Force Profit Tracker, home">
-      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4l10 12-10 12L6 16z" fill="none" stroke="#58d08e" stroke-width="3" stroke-linejoin="round"/><circle cx="16" cy="16" r="2.8" fill="#58d08e"/></svg>
-      <div>DF Tracker <span>Delta Force profit tracker</span></div>
-    </a>
-    <a class="btn btn-quiet" href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest">Download</a>
+    <a class="brand" href="index.html" aria-label="DF Tracker, home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4l10 12-10 12L6 16z" fill="none" stroke="#58d08e" stroke-width="3" stroke-linejoin="round"/><circle cx="16" cy="16" r="2.8" fill="#58d08e"/></svg><div>DF Tracker <span>Delta Force profit tracker</span></div></a>
+    <nav class="nav" aria-label="Main"><a href="features.html">Features</a><a href="try.html">Try it</a><a href="screenshots.html">Screenshots</a><a href="faq.html">FAQ</a><a class="btn btn-primary" href="download.html">Download</a></nav>
   </header>
-
   <main id="top">
+    
+
     <div class="hero">
       <div>
         <h1>Track what every Delta Force match actually pays.</h1>
-        <p class="lead">DF Tracker is a Windows app that adds up your credits for every match and shows where your profit really comes from, by map and by operator. Press a hotkey to see your profit or look up a player without leaving the game, and get an alert when an item you want drops to your price.</p>
+        <p class="lead">DF Tracker is a free Windows app that adds up your credits for every match and shows where your profit really comes from, by map and by operator. Press a hotkey to see your profit or look up a player without leaving the game.</p>
         <div class="cta-row">
-          <a class="btn btn-primary btn-lg" href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest">Download for Windows</a>
-          <a class="btn btn-quiet" href="#see-it">Watch the tour</a>
-          <span class="meta">Version 2.0.1. Windows 10 and 11.</span>
+          <a class="btn btn-primary btn-lg" href="download.html">Download for Windows</a>
+          <a class="btn btn-quiet" href="try.html">Try a player lookup</a>
+          <span class="meta">Version 2.1.0. Windows 10 and 11.</span>
         </div>
       </div>
-
       <aside class="ledger" aria-label="Example overview from the app">
         <header class="ledger-head"><h2>Overview</h2><small>Sample data</small></header>
         <div class="row"><span class="k">Matches</span><span class="rule"></span><span class="v">625</span></div>
@@ -395,247 +119,78 @@
       </aside>
     </div>
 
-    <section id="see-it" aria-labelledby="s-title">
+    <section class="first" aria-labelledby="w-title">
+      <h2 class="section-title" id="w-title">Everything in one app</h2>
+      <p class="section-lead">Pick a tool to see how it works.</p>
+      <ul class="cards">
+        <li><a class="card" href="features.html"><h3>Profit tracking</h3><p>Today, week, month and all-time profit, with every map, operator and match broken down.</p><span class="more">See features</span></a></li>
+        <li><a class="card" href="overlays.html"><h3>In-game overlays</h3><p>Hotkey pop-ups for your profit and for looking up a teammate or opponent mid-match.</p><span class="more">How overlays work</span></a></li>
+        <li><a class="card" href="player-lookup.html"><h3>Player lookup</h3><p>Search any player by name for K/D, extraction rate, rank and more.</p><span class="more">About lookup</span></a></li>
+        <li><a class="card" href="price-alerts.html"><h3>Price alerts</h3><p>Name the price you'd pay and get a pop-up when an auction item drops to it.</p><span class="more">Set an alert</span></a></li>
+        <li><a class="card" href="door-codes.html"><span class="tag">New</span><h3>Door codes</h3><p>The private room door code for every map in one place. Click one to copy it.</p><span class="more">See door codes</span></a></li>
+        <li><a class="card" href="fishing.html"><span class="tag">New</span><h3>Fishing and reds</h3><p>Every fish you've caught with details, and every red you've collected with its value.</p><span class="more">See fishing</span></a></li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="t-title">
+      <div class="band">
+        <div>
+          <h2 id="t-title">Try a player lookup right now</h2>
+          <p>Type a Delta Force player's name and see the stats the app shows, no download needed. Three free lookups a day.</p>
+        </div>
+        <form class="mini-form" action="try.html" method="get">
+          <label for="home-name" class="sr" style="position:absolute;left:-9999px">Player name</label>
+          <input class="field" id="home-name" name="name" maxlength="24" placeholder="Player name" autocomplete="off">
+          <button class="btn btn-go" type="submit">Look up</button>
+        </form>
+      </div>
+    </section>
+
+    <section aria-labelledby="s-title">
       <h2 class="section-title" id="s-title">See it in action</h2>
-      <p class="section-lead">A 38-second tour, then every screen. Click a screenshot to enlarge it.</p>
-      <figure class="tour">
+      <p class="section-lead">A 38-second tour. <a href="screenshots.html">Browse every screen</a>.</p>
+      <figure class="tour" style="margin:0">
         <video controls preload="metadata" playsinline width="1280" height="720" poster="media/tour-poster.jpg">
           <source src="media/tour.mp4" type="video/mp4">
           <source src="media/tour.webm" type="video/webm">
           Your browser can't play this video. <a href="media/tour.mp4">Download it</a> instead.
         </video>
-        <figcaption>A tour of DF Tracker 2.0. No sound. The screens show one player's real match data.</figcaption>
+        <figcaption>A tour of DF Tracker. No sound. The screens show one player's real match data.</figcaption>
       </figure>
-      <ul class="shots">
-        <li><a class="shot" href="media/overview-full.webp"><img src="media/overview.webp" width="800" height="500" loading="lazy" alt="Overview screen showing profit for today, this week, this month and all time, with daily, weekly and monthly tables and a Quick Stats panel."><span>Overview</span></a></li>
-        <li><a class="shot" href="media/profile-full.webp"><img src="media/profile.webp" width="800" height="500" loading="lazy" alt="Profile screen with player, rank, combat, economy and team stats, followed by extended stats."><span>Profile</span></a></li>
-        <li><a class="shot" href="media/maps-full.webp"><img src="media/maps.webp" width="800" height="500" loading="lazy" alt="Maps screen listing every map with its matches, wins and losses, and net income."><span>Maps</span></a></li>
-        <li><a class="shot" href="media/operators-full.webp"><img src="media/operators.webp" width="800" height="500" loading="lazy" alt="Operators screen with matches, win-loss, win rate, net income and average per match for each operator."><span>Operators</span></a></li>
-        <li><a class="shot" href="media/matches-full.webp"><img src="media/matches.webp" width="800" height="500" loading="lazy" alt="Match history list with the result, kills, map, operator, rank and net income of each match."><span>Match history</span></a></li>
-        <li><a class="shot" href="media/community-full.webp"><img src="media/community.webp" width="800" height="500" loading="lazy" alt="Community screen with the leaderboard: net income, matches, win-loss, win rate, best map and best operator. Other players' names are blurred."><span>Community</span></a></li>
-        <li><a class="shot" href="media/player-lookup-full.webp"><img src="media/player-lookup.webp" width="800" height="500" loading="lazy" alt="Player lookup screen showing a player's matches, combat, accuracy, knocks and stash value."><span>Player lookup</span></a></li>
-        <li><a class="shot" href="media/price-alerts-full.webp"><img src="media/price-alerts.webp" width="800" height="500" loading="lazy" alt="Price alerts screen with an item search, a target price field and the list of active alerts."><span>Price alerts</span></a></li>
-      </ul>
     </section>
 
-    <section id="features" aria-labelledby="f-title">
-      <h2 class="section-title" id="f-title">Your profit, in detail</h2>
-      <p class="section-lead">Everything DF Tracker records about your matches, in one window.</p>
-      <ul class="features">
-        <li>
-          <h3>Overview</h3>
-          <p>See what you've made <b>today, this week, this month, and all time</b>, with daily, weekly and monthly breakdowns. Your best raid and your most recent high-value items sit right below.</p>
-        </li>
-        <li>
-          <h3>Play sessions</h3>
-          <p>Start a session to track a block of play on its own, separate from calendar days, so a late night isn't split between yesterday and today. When you're done, copy a short summary of your net, matches, win rate and best raid to the clipboard.</p>
-        </li>
-        <li>
-          <h3>Weekly highlights</h3>
-          <p>Your evac rate and K/D for the week, your best and worst squad-mates by the value you extracted or lost together, your 7-day net worth, your most valuable items, and your best raid of the week, with a 7-day trend chart.</p>
-        </li>
-        <li>
-          <h3>Maps and operators</h3>
-          <p>Every map with its matches, wins and losses, and net income. Every operator with the same, plus <b>win rate and average profit per match</b>, so you can see exactly how much each operator has earned you. Sort any column, and double-click an operator to see its matches.</p>
-        </li>
-        <li>
-          <h3>Match history</h3>
-          <p>Browse every match with its result, kills, operator, rank and net income. Search and sort, then open any match for the <b>squad breakdown</b>, kills against operators and bots, and what you carried out. Refresh today's matches in one click, or sync to catch older ones.</p>
-        </li>
-        <li>
-          <h3>Profile and extended stats</h3>
-          <p>Your game profile, plus extended stats like accuracy, knocks, kills and deaths by difficulty, category scores, and stash value.</p>
-        </li>
-      </ul>
-    </section>
-
-    <section id="overlays" aria-labelledby="o-title">
-      <div class="split">
+    <section aria-labelledby="d-title" class="compact">
+      <div class="band">
         <div>
-          <h2 class="section-title" id="o-title">Check in without leaving the game</h2>
-          <p class="sublead">Two small overlays, each with its own hotkey. Both are off until you turn them on in Settings.</p>
-          <p><b>Profit overlay.</b> Press <b>Ctrl+Shift+D</b> to show your profit or loss for today, or for your current session, along with your best raid and your most recent loot. You can't click it, so it never gets in your way, and the same hotkey hides it.</p>
-          <p><b>Player search overlay.</b> Press <b>Ctrl+Shift+O</b>, type a name, and see that player's K/D overall and on easy, normal and hard, their extraction rate, current rank, and net stash. Results are cached, so searching the same name again is instant. It uses your free DF Tracker account: sign in with Discord in Settings first.</p>
-          <p>You can change either hotkey. The overlays are Windows only, and like any pop-up window they can't show over exclusive fullscreen, so use windowed or borderless mode. The same lookup is also a full page in the app, with accuracy, knocks, scores and stash value as well.</p>
+          <h2 id="d-title">Get DF Tracker</h2>
+          <p>Download it, open it, sign in with your Delta Force account and your matches load in. It updates itself after that. <a href="faq.html">Read the FAQ</a> or <a href="privacy.html">the privacy page</a> if you'd like to know more first.</p>
         </div>
-        <div class="mocks">
-          <div class="mock" role="img" aria-label="Example profit overlay with sample numbers">
-            <div class="mock-head"><b>Profit overlay</b><small>Sample data, Ctrl+Shift+D</small></div>
-            <div class="sub">TODAY</div>
-            <div class="big">+2,431,880</div>
-            <div class="kv"><span>Best raid</span><span class="up">1,205,400 on AZ3 (Normal)</span></div>
-            <hr>
-            <div class="sub">RECENT LOOT</div>
-            <div class="kv"><span>Rare weapon part</span><span class="up">640,000</span></div>
-            <div class="kv"><span>Collectible</span><span class="up">415,500</span></div>
-            <div class="kv"><span>Armor upgrade</span><span class="up">298,000</span></div>
-          </div>
-          <div class="mock" role="img" aria-label="Example player search overlay with sample numbers">
-            <div class="mock-head"><b>Player search overlay</b><small>Sample data, Ctrl+Shift+O</small></div>
-            <div class="kv"><span>PlayerName</span><span>Lv.60 / 50</span></div>
-            <div class="stats3">
-              <div><span>K/D</span><b>2.31</b></div>
-              <div><span>EXTRACT</span><b>54%</b></div>
-              <div><span>RANK</span><b>6,100</b><small>peak 9,400</small></div>
-              <div><span>EASY K/D</span><b class="up" style="color:var(--profit)">3.40</b></div>
-              <div><span>NORMAL K/D</span><b style="color:var(--profit)">1.80</b></div>
-              <div><span>HARD K/D</span><b style="color:#ff7b72">0.90</b></div>
-            </div>
-            <div class="kv"><span>Net stash</span><span class="up">850,000,000 credits</span></div>
-          </div>
-        </div>
+        <div class="cta-row"><a class="btn btn-primary btn-lg" href="download.html">Download for Windows</a></div>
       </div>
     </section>
 
-    <section id="alerts" aria-labelledby="a-title">
-      <div class="split">
-        <div>
-          <h2 class="section-title" id="a-title">Know when an item hits the price you want to pay</h2>
-          <p>Pick an item, set the price you'd <b>buy</b> it at, and DF Tracker notifies you when its auction price drops to that price or lower. You can watch several items at once.</p>
-          <p>It checks every minute while the app is open, even when it's minimized or in the system tray. You get a pop-up and, if you like, a sound. Enter prices as 5,000,000, 5m, or 750k.</p>
-          <p>Prices can trail the live auction house slightly. Each alert shows whether its price has been met or it's still waiting.</p>
-        </div>
-        <div class="mocks">
-          <div class="mock toast" role="img" aria-label="Example price alert notification with sample numbers">
-            <div class="mock-head"><b>Price alert</b><small>Sample data</small></div>
-            <p>Reactor Master is now 4,850,000 credits, at or below your target of 5,000,000.</p>
-          </div>
-          <div class="mock" role="img" aria-label="Example list of price alerts with sample numbers">
-            <div class="mock-head"><b>Your alerts</b><small>Sample data</small></div>
-            <div class="kv"><span>Reactor Master, target 5,000,000</span><span class="up">Price met</span></div>
-            <div class="kv"><span>Rare weapon part, target 600,000</span><span>Waiting for a price</span></div>
-            <div class="kv"><span>Collectible, target 300,000</span><span>Waiting for a price</span></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="community" aria-labelledby="c-title">
-      <h2 class="section-title" id="c-title">Compare with other players</h2>
-      <p class="section-lead">Optional. Join the community leaderboard with your Delta Force login.</p>
-      <ul class="features">
-        <li>
-          <h3>Community leaderboard</h3>
-          <p>See where you rank on the <b>Today</b> and <b>All-Time</b> boards: net income, matches, win rate, best map, and best operator. Click a player to see their recent matches.</p>
-        </li>
-        <li>
-          <h3>You choose what's shared</h3>
-          <p>Joining is optional. It shares your Overview totals and your recent matches (up to your last 200) under your in-game nickname. Leave at any time, and your stats are removed from the community server.</p>
-        </li>
-      </ul>
-    </section>
-
-    <section id="more" aria-labelledby="m-title">
-      <h2 class="section-title" id="m-title">Also included</h2>
-      <p class="section-lead">The small things that make it easy to leave running.</p>
-      <ul class="also">
-        <li><b>Auto-refresh</b> on a timer you choose, with an optional pop-up when new matches arrive</li>
-        <li><b>System tray</b> support: minimize to the tray, start with Windows, or start minimized</li>
-        <li><b>Automatic updates</b> that download in the background and install when you choose Restart and Update</li>
-        <li><b>CSV export</b> of your match history</li>
-        <li><b>Discord Rich Presence</b> showing today's profit and win-loss on your Discord profile</li>
-        <li><b>Seven color themes</b>, including a soft light one, and your own picture for the banner</li>
-      </ul>
-    </section>
-
-    <section id="download" aria-labelledby="d-title">
-      <h2 class="section-title" id="d-title">Get DF Tracker</h2>
-      <p class="section-lead">Download the latest version from GitHub. It updates itself after that.</p>
-      <ol class="steps">
-        <li><b>Download</b><span>Grab the latest Windows build from the releases page.</span></li>
-        <li><b>Run it</b><span>Open the app. Windows 10 or 11 is all you need.</span></li>
-        <li><b>Sign in</b><span>Use your Delta Force account and your matches load in. Sign in with Discord too if you want player lookup.</span></li>
-      </ol>
-      <a class="btn btn-primary btn-lg" href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/releases/latest">Download for Windows</a>
-      <p class="meta" style="margin-top:14px">Version 2.0.1</p>
-    </section>
-
-    <section class="faq" aria-labelledby="q-title">
-      <h2 class="section-title" id="q-title">Questions</h2>
-      <p class="section-lead">The short answers.</p>
-      <details>
-        <summary>Does DF Tracker touch the game?</summary>
-        <p>No. It runs as a separate app. It doesn't read the game's memory, inject code, or automate anything in the game, and the overlays are their own windows. Your own match data comes from the official Delta Force stats service. Player lookups and item prices come from separate third-party data sources.</p>
-      </details>
-      <details>
-        <summary>Do I need to sign in?</summary>
-        <p>There are two separate sign-ins, and only the first is needed to track your own matches. Your game account: sign in with your Delta Force (Level Infinite) account so DF Tracker can pull your matches. Your password goes only to Level Infinite's login, never to DF Tracker's servers. A DF Tracker account (optional): sign in with Discord to use player lookup and the player search overlay.</p>
-      </details>
-      <details>
-        <summary>What is a DF Tracker account?</summary>
-        <p>It's a free account you create by signing in with Discord. It lets our server know who is looking up players, so lookups can be limited fairly per person. It is separate from your game account, and DF Tracker only uses Discord to confirm who you are.</p>
-      </details>
-      <details>
-        <summary>What do you store about me?</summary>
-        <p>For a DF Tracker account: your Discord ID, email address, display name and avatar link as Discord provides them, your plan, how many lookups you've used each day, and when you last used the app. If you join the community leaderboard: your Overview totals and recent matches under your in-game nickname. Your own match history stays on your PC. The privacy page has the full details.</p>
-      </details>
-      <details>
-        <summary>How do the overlays work?</summary>
-        <p>Both overlays are off until you turn them on in Settings. The profit overlay opens with Ctrl+Shift+D and the player search overlay with Ctrl+Shift+O, and you can change either hotkey. The search overlay needs your DF Tracker account. Like any pop-up window, the overlays can't show over exclusive fullscreen, so play in windowed or borderless mode.</p>
-      </details>
-      <details>
-        <summary>Are price alerts for buying or selling?</summary>
-        <p>Buying. You pick an item and the price you'd like to pay, and DF Tracker notifies you when the item's auction price drops to that price or lower.</p>
-      </details>
-      <details>
-        <summary>Can I delete my account and data?</summary>
-        <p>Yes. Contact us from the privacy page and we'll delete your DF Tracker account and the data attached to it. Leaving the community leaderboard also removes your stats from it.</p>
-      </details>
-      <details>
-        <summary>Which versions of Windows are supported?</summary>
-        <p>Windows 10 and Windows 11.</p>
-      </details>
-      <details>
-        <summary>Is DF Tracker official?</summary>
-        <p>No. It's an independent fan-made tool and isn't affiliated with Level Infinite, Proxima Beta, or the Delta Force developers.</p>
-      </details>
-    </section>
   </main>
-
   <footer>
-    <p>DF Tracker is an independent fan-made project. It is not affiliated with, endorsed by, or sponsored by Level Infinite, Proxima Beta, or the developers of Delta Force. Delta Force and related names and marks belong to their respective owners.</p>
-    <p><a href="privacy.html">Privacy</a> &nbsp;|&nbsp; <a href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker">Releases on GitHub</a> &nbsp;|&nbsp; <a href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/issues">Contact</a></p>
+    <div class="foot-cols">
+      <div><h4>DF Tracker</h4><p>A free Windows app that tracks your Delta Force profit, with in-game overlays, player lookup and price alerts.</p></div>
+      <div><h4>Product</h4><ul>
+        <li><a href="features.html">Features</a></li><li><a href="overlays.html">In-game overlays</a></li>
+        <li><a href="player-lookup.html">Player lookup</a></li><li><a href="price-alerts.html">Price alerts</a></li>
+        <li><a href="community.html">Community leaderboard</a></li></ul></div>
+      <div><h4>Game tools</h4><ul>
+        <li><a href="door-codes.html">Door codes</a></li><li><a href="reds.html">Reds collection</a></li>
+        <li><a href="fishing.html">Fishing tracker</a></li><li><a href="try.html">Try a lookup</a></li></ul></div>
+      <div><h4>More</h4><ul>
+        <li><a href="download.html">Download</a></li><li><a href="changelog.html">Changelog</a></li>
+        <li><a href="faq.html">FAQ</a></li><li><a href="screenshots.html">Screenshots</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker">GitHub</a></li><li><a href="https://github.com/VsatCS2/Delta-Force-Profit-Tracker/issues">Contact</a></li></ul></div>
+    </div>
+    <div class="legal"><p>DF Tracker is an independent fan-made project. It is not affiliated with, endorsed by, or sponsored by Level Infinite, Proxima Beta, or the developers of Delta Force. Delta Force and related names and marks belong to their respective owners.</p></div>
   </footer>
 </div>
-
-<script>
-  // Count the headline number up once on load. Without JS, or with reduced
-  // motion, the final value is already in the HTML.
-  (function () {
-    var el = document.getElementById('avg');
-    if (!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    var target = +el.dataset.count, start = null, dur = 1100, delay = 950;
-    function fmt(n) { return Math.round(n).toLocaleString('en-US'); }
-    el.textContent = '0';
-    function tick(ts) {
-      if (start === null) start = ts;
-      var p = Math.min((ts - start) / dur, 1), eased = 1 - Math.pow(1 - p, 3);
-      el.textContent = fmt(target * eased);
-      if (p < 1) requestAnimationFrame(tick);
-    }
-    setTimeout(function () { requestAnimationFrame(tick); }, delay);
-  })();
-</script>
-<dialog id="lightbox" aria-label="Screenshot">
-  <img alt="">
-  <form method="dialog"><button>Close</button></form>
-</dialog>
-<script>
-  // Enlarge a screenshot in place. Without JS (or in an old browser) the links simply open the image.
-  (function () {
-    var box = document.getElementById('lightbox');
-    if (!box || typeof box.showModal !== 'function') return;
-    var img = box.querySelector('img');
-    document.querySelectorAll('a.shot').forEach(function (a) {
-      a.addEventListener('click', function (e) {
-        e.preventDefault();
-        img.src = a.getAttribute('href');
-        img.alt = a.querySelector('img').alt;
-        box.showModal();
-      });
-    });
-    box.addEventListener('click', function (e) { if (e.target === box || e.target === img) box.close(); });
-  })();
-</script>
+<dialog id="lightbox" aria-label="Screenshot"><img alt=""><form method="dialog"><button>Close</button></form></dialog>
+<script>window.DF_DEMO_API = "https://dfstatscl-production-d969.up.railway.app";</script>
+<script src="/assets/site.js?v=2026-11-13" defer></script>
 </body>
 </html>
