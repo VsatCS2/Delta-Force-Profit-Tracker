@@ -300,3 +300,6 @@
     .demo { padding: 20px; }
   }
   @media (max-width: 480px) { .site-head .btn-quiet { display: inline-flex; } }
+
+  .stats-shot { max-width: 530px; justify-self: center; }
+  .stats-shot img { aspect-ratio: auto; height: auto; border-radius: 12px; }
